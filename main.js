@@ -506,13 +506,27 @@ ipcMain.handle('game:launch', async () => {
   if (gameState !== 'idle') return { success: false, error: '游戏已在运行' };
   gameState = 'launching';
   gameStartTime = Date.now();
-  shell.openExternal('steam://rungameid/2868840');
+
+  // Try to launch the game executable directly from the selected game path
+  let launchedDirectly = false;
+  if (gamePath) {
+    const exePath = path.join(gamePath, 'SlayTheSpire2.exe');
+    if (fs.existsSync(exePath)) {
+      exec(`"${exePath}"`, { cwd: gamePath });
+      launchedDirectly = true;
+    }
+  }
+  // Fallback to Steam if exe not found
+  if (!launchedDirectly) {
+    shell.openExternal('steam://rungameid/2868840');
+  }
+
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('game:stateChanged', 'launching');
   }
-  // Start polling after short delay for Steam to react
-  setTimeout(() => watchGameProcess(), 3000);
-  return { success: true };
+  // Start polling after short delay
+  setTimeout(() => watchGameProcess(), launchedDirectly ? 1000 : 3000);
+  return { success: true, method: launchedDirectly ? 'direct' : 'steam' };
 });
 
 ipcMain.handle('game:getState', () => gameState);

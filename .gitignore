@@ -7,3 +7,8 @@ test_*.js
 *.zip
 .DS_Store
 Thumbs.db
+
+# Tauri
+src-tauri/target/
+dist-tauri/renderer.js
+dist-tauri/renderer.js.LICENSE.txt
