@@ -1,0 +1,9 @@
+node_modules/
+release/
+dist/win-unpacked/
+dist/builder-debug.yml
+dist/*.exe
+test_*.js
+*.zip
+.DS_Store
+Thumbs.db
