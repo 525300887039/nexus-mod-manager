@@ -13,5 +13,5 @@ src-tauri/target/
 dist-tauri/renderer.js
 dist-tauri/renderer.js.LICENSE.txt
 
-# Temp screenshots
-7521840a0a99bd91bde90efbae6ce027.png
+# Temp screenshots (hash-named)
+/[0-9a-f][0-9a-f][0-9a-f]*.png

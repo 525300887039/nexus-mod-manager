@@ -1,72 +1,101 @@
-# STS2 Mod Manager
+<div align="center">
 
-一个给 **Slay the Spire 2** 做的 MOD 管理器，帮你省去手动折腾文件夹的麻烦。
+# 🃏 STS2 Mod Manager
 
-装 MOD、删 MOD、开关 MOD，拖进来就行。
+**给杀戮尖塔 2 玩家的 MOD 管理工具**
 
-![MOD 管理](2bfb6c3361f08b1505d3dbebb3e8ea04.png)
+不用再手动复制文件夹了。装、删、开、关，拖进来就完事。
 
-![存档管理](b2b25d1efe767f01a2fb33484162ef4f.png)
+[![Release](https://img.shields.io/github/v/release/ImogeneOctaviap794/sts2-mod-manager?style=flat-square&color=7c3aed)](https://github.com/ImogeneOctaviap794/sts2-mod-manager/releases)
+[![Stars](https://img.shields.io/github/stars/ImogeneOctaviap794/sts2-mod-manager?style=flat-square&color=f59e0b)](https://github.com/ImogeneOctaviap794/sts2-mod-manager)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+
+<br>
+
+<img src="docs/preview-mods.png" width="90%" alt="MOD 管理界面" />
+
+<br><br>
+
+<img src="docs/preview-saves.png" width="90%" alt="存档管理界面" />
+
+</div>
+
+<br>
 
 ---
 
-## 能干什么
+<br>
 
-- **MOD 管理** — 一键安装 / 卸载 / 启用 / 禁用，支持拖拽安装 `.zip` `.rar`
-- **存档管理** — 普通存档和 MOD 存档分开显示，支持导出备份和导入还原
-- **游戏日志** — 实时查看最新日志，出问题能快速定位
-- **崩溃分析** — 游戏退出后自动分析日志，告诉你哪个 MOD 可能有问题
-- **MOD 翻译** — 看不懂英文描述？点一下自动翻译成中文
-- **配置档案** — 保存当前 MOD 启用方案，随时切换不同配置
-- **启动游戏** — Steam 正版和非 Steam 版都能直接从管理器启动
-- **游戏版本** — 自动读取并显示当前游戏版本号
+## ✨ 亮点
 
-## 用法
+| | 功能 | 说明 |
+|---|---|---|
+| 📦 | **MOD 管理** | 安装 / 卸载 / 启用 / 禁用，支持拖拽 `.zip` `.rar` 直接安装 |
+| 💾 | **存档管理** | 普通存档 & MOD 存档分开展示，一键导出备份、导入还原 |
+| 📋 | **游戏日志** | 实时查看最新日志，出问题秒定位 |
+| 🔍 | **崩溃分析** | 游戏退出后自动扫日志，精确到哪个 MOD 炸了 |
+| 🌐 | **MOD 翻译** | 英文描述看不懂？一键翻译成中文 |
+| ⚙️ | **配置档案** | 保存 MOD 启用方案，联机 / 单机随时切换 |
+| 🚀 | **启动游戏** | Steam 正版、非 Steam 版都支持，自动识别 |
 
-下载 [Releases](https://github.com/ImogeneOctaviap794/sts2-mod-manager/releases) 里的 EXE，双击打开就行。
+<br>
 
-首次启动会自动检测 Steam 里的游戏路径，找不到的话手动选一下就好，路径会记住。
+## 📥 下载
 
-MOD 安装：
-- 点「安装 MOD」选文件
-- 或者直接把 `.zip` / `.rar` 拖到窗口里
+👉 [**点这里下载最新版**](https://github.com/ImogeneOctaviap794/sts2-mod-manager/releases)
 
-## 技术栈
+> 安装包约 4MB，内置 WebView2 引导。Win10 / Win11 直接运行。
 
-| 前端 | 后端 | 打包 |
-|------|------|------|
-| React + TailwindCSS | Rust (Tauri) | NSIS 安装包 |
+<br>
 
-也保留了 Electron 版本的代码，如果需要可以用 `npm run build` 构建 Electron 版。
+## 🚀 上手
 
-## 本地开发
+1. 双击打开，管理器会自动找到你的游戏
+2. 找不到？左下角点一下手动选目录，只需选一次
+3. 装 MOD — 点「安装 MOD」选文件，或者**直接拖进窗口**
+4. 开玩
+
+<br>
+
+## 🛠 本地开发
 
 ```bash
-# 安装前端依赖
-npm install
-
-# Tauri 开发模式
-npm run tauri:dev
-
-# Tauri 打包
-npm run tauri:build
-
-# Electron 开发模式
-npm run dev
+npm install              # 装依赖
+npm run tauri:dev        # Tauri 开发模式
+npm run tauri:build      # Tauri 打包
+npm run dev              # Electron 开发模式
 ```
 
-Tauri 打包需要 Rust 工具链和 VS Build Tools C++ 组件。
+> Tauri 打包需要 [Rust](https://rustup.rs/) + [VS Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（勾选 C++ 桌面开发）
 
-## 目录结构
+<br>
+
+## 📐 技术栈
 
 ```
-src/              React 前端源码
-src-tauri/        Tauri 后端 (Rust)
+前端    React 18 + TailwindCSS + Lucide Icons
+后端    Rust (Tauri v2)
+打包    NSIS 安装包 (~4MB)
+备选    Electron 版本代码也保留着
+```
+
+<br>
+
+## 📁 项目结构
+
+```
+src/              前端源码 (React)
+src-tauri/        后端源码 (Rust)
+dist-tauri/       前端构建产物
 main.js           Electron 主进程
-preload.js        Electron 预加载脚本
-dist-tauri/       Tauri 前端构建产物
+preload.js        Electron 预加载
+docs/             截图素材
 ```
 
-## License
+<br>
 
-MIT
+---
+
+<div align="center">
+<sub>MIT License · 给个 ⭐ 就是最大的支持</sub>
+</div>
