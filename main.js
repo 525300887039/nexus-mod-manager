@@ -507,17 +507,21 @@ ipcMain.handle('game:launch', async () => {
   gameState = 'launching';
   gameStartTime = Date.now();
 
-  // Try to launch the game executable directly from the selected game path
-  let launchedDirectly = false;
-  if (gamePath) {
+  // Determine launch method based on game path
+  // steamapps in path → Steam copy → use Steam protocol
+  // Otherwise → launch EXE directly
+  let method = 'steam';
+  if (gamePath && gamePath.toLowerCase().includes('steamapps')) {
+    shell.openExternal('steam://rungameid/2868840');
+  } else if (gamePath) {
     const exePath = path.join(gamePath, 'SlayTheSpire2.exe');
     if (fs.existsSync(exePath)) {
       exec(`"${exePath}"`, { cwd: gamePath });
-      launchedDirectly = true;
+      method = 'direct';
+    } else {
+      shell.openExternal('steam://rungameid/2868840');
     }
-  }
-  // Fallback to Steam if exe not found
-  if (!launchedDirectly) {
+  } else {
     shell.openExternal('steam://rungameid/2868840');
   }
 
@@ -525,8 +529,8 @@ ipcMain.handle('game:launch', async () => {
     mainWindow.webContents.send('game:stateChanged', 'launching');
   }
   // Start polling after short delay
-  setTimeout(() => watchGameProcess(), launchedDirectly ? 1000 : 3000);
-  return { success: true, method: launchedDirectly ? 'direct' : 'steam' };
+  setTimeout(() => watchGameProcess(), method === 'direct' ? 1000 : 3000);
+  return { success: true, method };
 });
 
 ipcMain.handle('game:getState', () => gameState);

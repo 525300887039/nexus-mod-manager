@@ -65,29 +65,32 @@ pub fn game_launch(state: tauri::State<'_, AppState>) -> LaunchResult {
         }
     }
 
-    let mut launched_directly = false;
+    let mut method = "steam";
     {
         let gp = state.game_path.lock().unwrap();
         if let Some(ref p) = *gp {
-            let exe_path = Path::new(p).join("SlayTheSpire2.exe");
-            if exe_path.exists() {
-                let _ = Command::new(&exe_path).current_dir(p).spawn();
-                launched_directly = true;
+            let is_steam = p.to_lowercase().contains("steamapps");
+            if is_steam {
+                // Steam copy → launch via Steam protocol
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = Command::new("cmd")
+                        .args(["/C", "start", "steam://rungameid/2868840"])
+                        .spawn();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = opener::open_browser("steam://rungameid/2868840");
+                }
+                method = "steam";
+            } else {
+                // Non-Steam → launch EXE directly
+                let exe_path = Path::new(p).join("SlayTheSpire2.exe");
+                if exe_path.exists() {
+                    let _ = Command::new(&exe_path).current_dir(p).spawn();
+                    method = "direct";
+                }
             }
-        }
-    }
-
-    if !launched_directly {
-        // Fallback to Steam
-        #[cfg(target_os = "windows")]
-        {
-            let _ = Command::new("cmd")
-                .args(["/C", "start", "steam://rungameid/2868840"])
-                .spawn();
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = opener::open_browser("steam://rungameid/2868840");
         }
     }
 
@@ -96,11 +99,10 @@ pub fn game_launch(state: tauri::State<'_, AppState>) -> LaunchResult {
         *gs = "launching".to_string();
     }
 
-    // Note: process monitoring is handled by frontend polling game_get_state
     LaunchResult {
         success: true,
         error: None,
-        method: Some(if launched_directly { "direct" } else { "steam" }.into()),
+        method: Some(method.into()),
     }
 }
 

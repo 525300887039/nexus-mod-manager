@@ -65,7 +65,18 @@ pub fn run() {
             saves::saves_delete_backup,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            eprintln!("Tauri error: {}", e);
+            let log_dir = dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("STS2ModManager");
+            let log_path = log_dir.join("launch.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log_path) {
+                use std::io::Write;
+                let _ = writeln!(f, "Tauri error: {}", e);
+            }
+            panic!("Tauri error: {}", e);
+        });
 }
 
 // ── Window commands ──
