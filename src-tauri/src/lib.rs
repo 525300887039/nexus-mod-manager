@@ -5,6 +5,7 @@ mod mods;
 mod profiles;
 mod saves;
 mod translate;
+mod translations;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -58,6 +59,9 @@ pub fn run() {
             profiles::profiles_save,
             // Translate
             translate::translate_text,
+            // Translations persistence
+            translations::translations_load,
+            translations::translations_save,
             // Saves
             saves::saves_scan,
             saves::saves_export,
