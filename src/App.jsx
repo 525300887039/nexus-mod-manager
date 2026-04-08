@@ -802,11 +802,8 @@ export default function App() {
             </div>
             <div className="px-6 py-4 border-t border-gray-100 flex gap-2">
               <button onClick={confirmDialog.onConfirm}
-                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  confirmDialog.danger
-                    ? 'bg-red-600 text-white hover:bg-red-500'
-                    : 'bg-gray-900 text-white hover:bg-gray-800'
-                }`}>
+                style={{ backgroundColor: confirmDialog.danger ? '#dc2626' : '#111827', color: '#fff' }}
+                className="flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors">
                 确认
               </button>
               <button onClick={() => setConfirmDialog(null)}
