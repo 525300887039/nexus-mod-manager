@@ -27,6 +27,20 @@ fn config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
+pub fn resolve_game_path_from_config(cfg: &Config) -> Option<String> {
+    if let Some(ref game_path) = cfg.game_path {
+        if Path::new(game_path).exists() {
+            return Some(game_path.clone());
+        }
+    }
+    detect_game_path()
+}
+
+pub fn load_or_detect_game_path() -> Option<String> {
+    let cfg = load_config();
+    resolve_game_path_from_config(&cfg)
+}
+
 pub fn load_config() -> Config {
     let p = config_path();
     if p.exists() {
@@ -58,9 +72,7 @@ fn detect_game_path() -> Option<String> {
     ];
 
     for sp in &steam_paths {
-        let vdf_path = Path::new(sp)
-            .join("steamapps")
-            .join("libraryfolders.vdf");
+        let vdf_path = Path::new(sp).join("steamapps").join("libraryfolders.vdf");
         if vdf_path.exists() {
             if let Ok(content) = fs::read_to_string(&vdf_path) {
                 // Parse "path" entries from VDF
@@ -109,15 +121,7 @@ fn detect_game_path() -> Option<String> {
 #[tauri::command]
 pub fn app_init(state: tauri::State<'_, AppState>) -> InitResult {
     let cfg = load_config();
-    let detected = if let Some(ref gp) = cfg.game_path {
-        if Path::new(gp).exists() {
-            Some(gp.clone())
-        } else {
-            detect_game_path()
-        }
-    } else {
-        detect_game_path()
-    };
+    let detected = resolve_game_path_from_config(&cfg);
 
     if let Some(ref gp) = detected {
         let mut state_gp = state.game_path.lock().unwrap();

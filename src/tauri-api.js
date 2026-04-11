@@ -91,6 +91,11 @@ window.api = {
 
   // Translate
   translateText: (text) => invoke('translate_text', { text }),
+  getCachedTranslation: (text) => invoke('translation_cache_get', { sourceText: text }),
+  setCachedTranslation: (text, translated, provider) => invoke('translation_cache_set', { sourceText: text, translated, provider }),
+  batchGetTranslations: (texts) => invoke('translation_cache_batch_get', { texts }),
+  getCacheCount: () => invoke('translation_cache_count'),
+  clearTranslationCache: () => invoke('translation_cache_clear'),
   loadTranslations: () => invoke('translations_load'),
   saveTranslations: (data) => invoke('translations_save', { data }),
 
