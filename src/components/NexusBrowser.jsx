@@ -193,6 +193,7 @@ export default function NexusBrowser({
   const [translateProgress, setTranslateProgress] = useState({ done: 0, total: 0 });
 
   const translationsRef = useRef({});
+  const tabStatesRef = useRef(createAllTabStates());
   const saveQueueRef = useRef(Promise.resolve());
   const translateAbortRef = useRef(false);
   const deferredSearch = useDeferredValue(search);
@@ -202,6 +203,10 @@ export default function NexusBrowser({
   useEffect(() => {
     translationsRef.current = translations;
   }, [translations]);
+
+  useEffect(() => {
+    tabStatesRef.current = tabStates;
+  }, [tabStates]);
 
   useEffect(() => {
     return () => {
@@ -250,7 +255,7 @@ export default function NexusBrowser({
       return;
     }
 
-    if (!force && tabStates[tab].loading) {
+    if (!force && tabStatesRef.current[tab]?.loading) {
       return;
     }
 
@@ -401,6 +406,7 @@ export default function NexusBrowser({
       return;
     }
 
+    translateAbortRef.current = false;
     setTranslatingIds((previous) => ({ ...previous, [mod.modId]: true }));
     try {
       const result = await translateListMod(mod, { force: true, throttle: false });
@@ -501,7 +507,8 @@ export default function NexusBrowser({
     if (!hasApiKey) {
       return;
     }
-    if (!tabStates[tab].loaded && !tabStates[tab].loading) {
+    const nextTabState = tabStatesRef.current[tab];
+    if (!nextTabState?.loaded && !nextTabState?.loading) {
       await fetchTab(tab);
     }
   };

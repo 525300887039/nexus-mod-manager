@@ -12,6 +12,19 @@ let gameExitedCallback = null;
 let pollingInterval = null;
 let lastGameState = 'idle';
 
+function stopGameStatePolling() {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+  }
+}
+
+function maybeStopGameStatePolling() {
+  if (!gameStateCallback && !gameExitedCallback) {
+    stopGameStatePolling();
+  }
+}
+
 function startGameStatePolling() {
   if (pollingInterval) return;
   pollingInterval = setInterval(async () => {
@@ -31,8 +44,7 @@ function startGameStatePolling() {
       }
       // Stop polling if idle
       if (state === 'idle' && pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
+        stopGameStatePolling();
       }
     } catch (e) {
       // ignore polling errors
@@ -78,8 +90,34 @@ window.api = {
   getGameState: () => invoke('game_get_state'),
   getGameVersion: () => invoke('game_get_version'),
   analyzeCrash: () => invoke('game_analyze_crash'),
-  onGameStateChanged: (cb) => { gameStateCallback = cb; },
-  onGameExited: (cb) => { gameExitedCallback = cb; },
+  onGameStateChanged: (cb) => {
+    gameStateCallback = typeof cb === 'function' ? cb : null;
+    if (gameStateCallback && !pollingInterval && lastGameState !== 'idle') {
+      startGameStatePolling();
+    } else {
+      maybeStopGameStatePolling();
+    }
+    return () => {
+      if (gameStateCallback === cb) {
+        gameStateCallback = null;
+      }
+      maybeStopGameStatePolling();
+    };
+  },
+  onGameExited: (cb) => {
+    gameExitedCallback = typeof cb === 'function' ? cb : null;
+    if (gameExitedCallback && !pollingInterval && lastGameState !== 'idle') {
+      startGameStatePolling();
+    } else {
+      maybeStopGameStatePolling();
+    }
+    return () => {
+      if (gameExitedCallback === cb) {
+        gameExitedCallback = null;
+      }
+      maybeStopGameStatePolling();
+    };
+  },
 
   // Logs
   getLatestLogs: () => invoke('logs_get_latest'),

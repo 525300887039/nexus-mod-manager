@@ -66,6 +66,25 @@ function buildPayload(config) {
   };
 }
 
+function validateConfig(config) {
+  const normalized = normalizeConfig(config);
+
+  if (normalized.engineMode === 'mymemory') {
+    return '';
+  }
+  if (!normalized.apiUrl.trim()) {
+    return '请输入大模型 API 地址';
+  }
+  if (!normalized.apiKey.trim()) {
+    return '请输入大模型 API Key';
+  }
+  if (!normalized.model.trim()) {
+    return '请输入模型名';
+  }
+
+  return '';
+}
+
 export default function TranslateSettings({ embedded = false, onShowToast, onConfirm }) {
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(true);
@@ -121,12 +140,28 @@ export default function TranslateSettings({ embedded = false, onShowToast, onCon
   }, []);
 
   const persistConfig = async (silent = false) => {
+    const validationError = validateConfig(config);
+    if (validationError) {
+      setStatus({
+        type: 'error',
+        message: validationError,
+      });
+      return false;
+    }
+
     setSaving(true);
     try {
       await window.api.saveLlmConfig(buildPayload(config));
       const latest = normalizeConfig(await window.api.loadLlmConfig());
       setConfig(latest);
-      setStatus(null);
+      setStatus(
+        silent
+          ? null
+          : {
+            type: 'success',
+            message: '翻译设置已保存到本地配置。',
+          },
+      );
       if (!silent) {
         onShowToast?.('翻译设置已保存到本地配置。');
       }
@@ -148,6 +183,21 @@ export default function TranslateSettings({ embedded = false, onShowToast, onCon
         success: false,
         translated: null,
         error: '请输入测试文本',
+        provider: null,
+      });
+      return;
+    }
+
+    const validationError = validateConfig(config);
+    if (validationError) {
+      setStatus({
+        type: 'error',
+        message: validationError,
+      });
+      setTestResult({
+        success: false,
+        translated: null,
+        error: validationError,
         provider: null,
       });
       return;

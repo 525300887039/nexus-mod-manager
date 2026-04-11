@@ -27,5 +27,8 @@ module.exports = {
   resolve: {
     extensions: ['.js', '.jsx'],
   },
+  performance: {
+    hints: false,
+  },
   target: 'web',
 };
