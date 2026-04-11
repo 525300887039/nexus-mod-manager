@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
 const DEFAULT_SYSTEM_PROMPT: &str = "你是一个游戏MOD翻译助手，请将以下英文翻译成简体中文，保留专有名词不翻译。只返回翻译结果，不要添加任何解释。";
+const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", default)]
@@ -113,6 +115,30 @@ pub fn save_config(config: &LlmConfig) -> Result<(), String> {
     fs::write(&path, json).map_err(|e| format!("写入配置文件失败 ({}): {}", path.display(), e))
 }
 
+fn extract_message_content(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(content) => {
+            let trimmed = content.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        serde_json::Value::Array(items) => {
+            let combined = items
+                .iter()
+                .filter_map(|item| {
+                    item.get("text")
+                        .and_then(|text| text.as_str())
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!combined.trim().is_empty()).then_some(combined)
+        }
+        _ => None,
+    }
+}
+
 pub async fn translate(text: &str, config: &LlmConfig) -> Result<String, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -121,7 +147,12 @@ pub async fn translate(text: &str, config: &LlmConfig) -> Result<String, String>
 
     ensure_llm_ready(config)?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        // Only bound connection setup. Local/self-hosted backends may need much longer to
+        // finish generating a translation for large mod descriptions.
+        .connect_timeout(Duration::from_secs(LLM_CONNECT_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("初始化大模型 HTTP 客户端失败: {}", e))?;
     let payload = json!({
         "model": config.model.as_str(),
         "messages": [
@@ -161,6 +192,10 @@ pub async fn translate(text: &str, config: &LlmConfig) -> Result<String, String>
         return Err(format!("大模型 API 返回错误 {}: {}", status, detail));
     }
 
+    if body.trim().is_empty() {
+        return Err("大模型 API 返回空响应".to_string());
+    }
+
     let parsed: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析大模型响应失败: {}", e))?;
 
@@ -169,12 +204,10 @@ pub async fn translate(text: &str, config: &LlmConfig) -> Result<String, String>
         .and_then(|choices| choices.get(0))
         .and_then(|choice| choice.get("message"))
         .and_then(|message| message.get("content"))
-        .and_then(|content| content.as_str())
-        .map(str::trim)
-        .filter(|content| !content.is_empty())
+        .and_then(extract_message_content)
         .ok_or_else(|| "大模型响应缺少 choices[0].message.content".to_string())?;
 
-    Ok(translated.to_string())
+    Ok(translated)
 }
 
 #[tauri::command]
