@@ -8,6 +8,8 @@ use tauri_plugin_dialog::DialogExt;
 pub struct Config {
     #[serde(rename = "gamePath")]
     pub game_path: Option<String>,
+    #[serde(rename = "nexusApiKey")]
+    pub nexus_api_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -53,12 +55,16 @@ pub fn load_config() -> Config {
     Config::default()
 }
 
-pub fn save_config(cfg: &Config) {
+fn save_config_inner(cfg: &Config) -> Result<(), String> {
     let dir = config_dir();
-    let _ = fs::create_dir_all(&dir);
-    if let Ok(json) = serde_json::to_string_pretty(cfg) {
-        let _ = fs::write(config_path(), json);
-    }
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建配置目录 {}: {}", dir.display(), e))?;
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| format!("序列化配置失败: {}", e))?;
+    fs::write(config_path(), json).map_err(|e| format!("写入配置文件失败: {}", e))?;
+    Ok(())
+}
+
+pub fn save_config(cfg: &Config) {
+    let _ = save_config_inner(cfg);
 }
 
 fn detect_game_path() -> Option<String> {
@@ -182,4 +188,24 @@ pub async fn app_select_game_path(
     } else {
         Ok(None)
     }
+}
+
+#[tauri::command]
+pub fn config_save_nexus_key(key: String) -> Result<(), String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("API Key 不能为空".to_string());
+    }
+
+    let mut cfg = load_config();
+    cfg.nexus_api_key = Some(trimmed.to_string());
+    save_config_inner(&cfg)
+}
+
+#[tauri::command]
+pub fn config_get_nexus_key() -> Option<String> {
+    load_config()
+        .nexus_api_key
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
 }
