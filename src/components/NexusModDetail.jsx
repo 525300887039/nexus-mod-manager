@@ -36,6 +36,11 @@ function groupFilesByCategory(files) {
     .map((category) => [category, groups[category]]);
 }
 
+function canAutoInstallFile(file) {
+  const name = file?.fileName || file?.name || '';
+  return name.toLowerCase().endsWith('.zip');
+}
+
 export default function NexusModDetail({
   mod,
   translationEntry,
@@ -109,6 +114,7 @@ export default function NexusModDetail({
     [files],
   );
   const autoDownloadSupported = typeof window.api?.openNexusDownload === 'function';
+  const preferredFileCanAutoInstall = canAutoInstallFile(preferredFile);
 
   const handleTranslate = async () => {
     setTranslating(true);
@@ -138,6 +144,7 @@ export default function NexusModDetail({
 
   const handleOpenDownload = async (file = preferredFile) => {
     const fileName = file?.fileName || file?.name || currentMod.name || 'Nexus Mod';
+    const canAutoInstall = canAutoInstallFile(file);
 
     if (!autoDownloadSupported) {
       const message = '当前运行环境不支持内嵌 Nexus 下载窗口';
@@ -153,7 +160,9 @@ export default function NexusModDetail({
     setOpeningDownload(true);
     onNexusDownloadStatusChange?.({
       phase: 'preparing',
-      message: `正在打开 ${fileName} 的下载页...`,
+      message: canAutoInstall
+        ? `正在打开 ${fileName} 的下载页...`
+        : `正在打开 ${fileName} 的下载页（该文件仅下载，不会自动安装）...`,
       fileName,
     });
 
@@ -367,7 +376,7 @@ export default function NexusModDetail({
                             className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
                           >
                             {openingDownload ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                            下载安装
+                            {canAutoInstallFile(file) ? '下载安装' : '仅下载'}
                           </button>
                         </div>
                       </div>
@@ -396,7 +405,9 @@ export default function NexusModDetail({
           className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
         >
           {openingDownload ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-          {openingDownload ? '正在打开下载页...' : '下载安装'}
+          {openingDownload
+            ? '正在打开下载页...'
+            : preferredFileCanAutoInstall ? '下载安装' : '下载文件'}
         </button>
         <button
           type="button"
@@ -408,7 +419,7 @@ export default function NexusModDetail({
           {manualInstalling ? '正在选择文件...' : '手动安装'}
         </button>
         <p className="text-xs leading-5 text-gray-400">
-          如果自动下载不生效，请先在浏览器下载，再点击“手动安装”选择已下载的压缩包。
+          ZIP 文件会在下载完成后自动安装；如果文件是 .rar / .7z 或自动下载不生效，请先在浏览器下载，再点击“手动安装”选择已下载的压缩包。
         </p>
       </div>
     </aside>

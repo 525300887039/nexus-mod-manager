@@ -135,11 +135,17 @@ export default function App() {
       showToast(message, 'error');
     });
 
+    const unlistenSaved = tauriEvent.listen('nexus-download-saved', (event) => {
+      const message = event?.payload || '文件已下载到临时目录';
+      showToast(message);
+    });
+
     return () => {
       unlistenState.then((fn) => fn());
       unlistenSuccess.then((fn) => fn());
       unlistenError.then((fn) => fn());
       unlistenFailed.then((fn) => fn());
+      unlistenSaved.then((fn) => fn());
     };
   }, [refreshMods, showToast]);
 

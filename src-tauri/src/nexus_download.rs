@@ -13,6 +13,7 @@ const DOWNLOAD_STATE_EVENT: &str = "nexus-download-state";
 const INSTALL_SUCCESS_EVENT: &str = "nexus-install-success";
 const INSTALL_ERROR_EVENT: &str = "nexus-install-error";
 const DOWNLOAD_FAILED_EVENT: &str = "nexus-download-failed";
+const DOWNLOAD_SAVED_EVENT: &str = "nexus-download-saved";
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +39,12 @@ fn emit_download_state(
 
 fn extract_file_name(path: &Path) -> Option<String> {
     path.file_name().map(|name| name.to_string_lossy().to_string())
+}
+
+fn is_zip_archive(path: &Path) -> bool {
+    path.extension()
+        .map(|value| value.to_string_lossy().eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
 }
 
 fn decode_file_name_from_url(url: &tauri::webview::Url) -> String {
@@ -171,6 +178,21 @@ pub async fn nexus_open_download_page(
                         return true;
                     }
                 };
+
+                if !is_zip_archive(&archive_path) {
+                    let message = format!(
+                        "{} 已下载到临时目录，但不是 ZIP 文件，请手动解压或安装",
+                        file_name
+                    );
+                    emit_download_state(
+                        &app_handle,
+                        "success",
+                        &message,
+                        Some(file_name.clone()),
+                    );
+                    let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, DOWNLOAD_SAVED_EVENT, message);
+                    return true;
+                }
 
                 emit_download_state(
                     &app_handle,
