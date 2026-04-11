@@ -19,6 +19,7 @@ pub struct AppState {
     pub db: Mutex<rusqlite::Connection>,
     pub game_path: Mutex<Option<String>>,
     pub game_state: Mutex<String>, // "idle" | "launching" | "running"
+    pub nexus_mod_cache: Mutex<std::collections::HashMap<u64, nexus_api::NexusModInfo>>,
 }
 
 pub fn run() {
@@ -45,6 +46,7 @@ pub fn run() {
                 db: Mutex::new(db_conn),
                 game_path: Mutex::new(None),
                 game_state: Mutex::new("idle".to_string()),
+                nexus_mod_cache: Mutex::new(std::collections::HashMap::new()),
             });
 
             Ok(())
@@ -107,6 +109,7 @@ pub fn run() {
             nexus_api::nexus_get_latest_updated,
             nexus_api::nexus_get_mod,
             nexus_api::nexus_get_mod_files,
+            nexus_api::nexus_find_mod_by_name,
             nexus_download::nexus_open_download_page,
             // Saves
             saves::saves_scan,

@@ -14,6 +14,7 @@ pub struct ModInfo {
     pub name: Option<String>,
     pub author: Option<String>,
     pub version: Option<String>,
+    pub nexus_id: Option<u64>,
     pub description: Option<String>,
     pub dependencies: Option<Vec<String>>,
     pub affects_gameplay: Option<bool>,
@@ -112,6 +113,15 @@ fn dir_size(path: &Path) -> u64 {
     size
 }
 
+fn parse_optional_u64(value: Option<&serde_json::Value>) -> Option<u64> {
+    value.and_then(|raw| {
+        raw.as_u64().or_else(|| {
+            raw.as_str()
+                .and_then(|text| text.trim().parse::<u64>().ok())
+        })
+    })
+}
+
 fn try_parse_mod(full_path: &Path, item_name: &str, enabled: bool) -> Option<ModInfo> {
     let meta = fs::metadata(full_path).ok()?;
 
@@ -137,6 +147,7 @@ fn try_parse_mod(full_path: &Path, item_name: &str, enabled: bool) -> Option<Mod
                         name: data.get("name").and_then(|v| v.as_str()).map(String::from),
                         author: data.get("author").and_then(|v| v.as_str()).map(String::from),
                         version: data.get("version").and_then(|v| v.as_str()).map(String::from),
+                        nexus_id: parse_optional_u64(data.get("nexus_id")),
                         description: data
                             .get("description")
                             .and_then(|v| v.as_str())
@@ -198,6 +209,7 @@ fn try_parse_mod(full_path: &Path, item_name: &str, enabled: bool) -> Option<Mod
                     name: data.get("name").and_then(|v| v.as_str()).map(String::from),
                     author: data.get("author").and_then(|v| v.as_str()).map(String::from),
                     version: data.get("version").and_then(|v| v.as_str()).map(String::from),
+                    nexus_id: parse_optional_u64(data.get("nexus_id")),
                     description: data
                         .get("description")
                         .and_then(|v| v.as_str())

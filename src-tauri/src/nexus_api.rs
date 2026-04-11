@@ -1,5 +1,6 @@
-use crate::config;
+use crate::{config, mods, AppState};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tauri::State;
 
 const NEXUS_API_BASE: &str = "https://api.nexusmods.com/v1";
 const GAME_DOMAIN: &str = "slaythespire2";
@@ -117,6 +118,95 @@ fn format_nexus_error(status: reqwest::StatusCode, body: &str) -> String {
     }
 }
 
+fn normalize_match_text(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn cache_nexus_mods(state: &State<'_, AppState>, mods: &[NexusModInfo]) -> Result<(), String> {
+    let mut cache = state
+        .nexus_mod_cache
+        .lock()
+        .map_err(|e| format!("Nexus 缓存锁已损坏: {}", e))?;
+
+    for mod_info in mods {
+        cache.insert(mod_info.mod_id, mod_info.clone());
+    }
+
+    Ok(())
+}
+
+fn read_cached_nexus_mods(state: &State<'_, AppState>) -> Result<Vec<NexusModInfo>, String> {
+    let cache = state
+        .nexus_mod_cache
+        .lock()
+        .map_err(|e| format!("Nexus 缓存锁已损坏: {}", e))?;
+
+    Ok(cache.values().cloned().collect())
+}
+
+fn find_local_mod(name: &str, state: &State<'_, AppState>) -> Option<mods::ModInfo> {
+    let game_path = state.game_path.lock().ok()?.clone()?;
+    let lookup = normalize_match_text(name);
+
+    mods::scan_mods_internal(&game_path).into_iter().find(|mod_info| {
+        mod_info
+            .name
+            .as_deref()
+            .map(normalize_match_text)
+            .map(|value| value == lookup)
+            .unwrap_or(false)
+            || mod_info
+                .id
+                .as_deref()
+                .map(normalize_match_text)
+                .map(|value| value == lookup)
+                .unwrap_or(false)
+    })
+}
+
+fn find_matching_cached_mod(
+    local_mod: &mods::ModInfo,
+    cached_mods: &[NexusModInfo],
+) -> Option<NexusModInfo> {
+    if let Some(local_name) = local_mod.name.as_deref() {
+        let normalized_name = normalize_match_text(local_name);
+        if let Some(exact_name_match) = cached_mods
+            .iter()
+            .find(|mod_info| normalize_match_text(&mod_info.name) == normalized_name)
+            .cloned()
+        {
+            return Some(exact_name_match);
+        }
+    }
+
+    if let Some(local_id) = local_mod.id.as_deref() {
+        let normalized_id = normalize_match_text(local_id);
+        if let Some(fuzzy_match) = cached_mods
+            .iter()
+            .find(|mod_info| normalize_match_text(&mod_info.name).contains(&normalized_id))
+            .cloned()
+        {
+            return Some(fuzzy_match);
+        }
+    }
+
+    None
+}
+
+async fn fetch_mod_by_id(
+    mod_id: u64,
+    state: &State<'_, AppState>,
+) -> Result<NexusModInfo, String> {
+    let api_key = get_saved_api_key()?;
+    let mod_info: NexusModInfo = nexus_get(
+        &format!("/games/{}/mods/{}.json", GAME_DOMAIN, mod_id),
+        &api_key,
+    )
+    .await?;
+    cache_nexus_mods(state, &[mod_info.clone()])?;
+    Ok(mod_info)
+}
+
 async fn nexus_get<T: DeserializeOwned>(endpoint: &str, api_key: &str) -> Result<T, String> {
     let api_key = require_api_key(api_key)?;
     let url = format!("{NEXUS_API_BASE}{endpoint}");
@@ -142,6 +232,49 @@ async fn nexus_get<T: DeserializeOwned>(endpoint: &str, api_key: &str) -> Result
     serde_json::from_str::<T>(&body).map_err(|e| format!("解析 Nexus Mods API 响应失败: {}", e))
 }
 
+async fn ensure_cached_mod_lists(state: &State<'_, AppState>) -> Result<(), String> {
+    let cached_mods = read_cached_nexus_mods(state)?;
+    if !cached_mods.is_empty() {
+        return Ok(());
+    }
+
+    let api_key = get_saved_api_key()?;
+    let mut collected = Vec::new();
+
+    if let Ok(mods) = nexus_get::<Vec<NexusModInfo>>(
+        &format!("/games/{}/mods/trending.json", GAME_DOMAIN),
+        &api_key,
+    )
+    .await
+    {
+        collected.extend(mods);
+    }
+
+    if let Ok(mods) = nexus_get::<Vec<NexusModInfo>>(
+        &format!("/games/{}/mods/latest_added.json", GAME_DOMAIN),
+        &api_key,
+    )
+    .await
+    {
+        collected.extend(mods);
+    }
+
+    if let Ok(mods) = nexus_get::<Vec<NexusModInfo>>(
+        &format!("/games/{}/mods/latest_updated.json", GAME_DOMAIN),
+        &api_key,
+    )
+    .await
+    {
+        collected.extend(mods);
+    }
+
+    if collected.is_empty() {
+        return Err("无法预热 Nexus 模组缓存".to_string());
+    }
+
+    cache_nexus_mods(state, &collected)
+}
+
 #[tauri::command]
 pub async fn nexus_validate_key(key: String) -> Result<NexusValidateResult, String> {
     let key = key.trim().to_string();
@@ -149,43 +282,51 @@ pub async fn nexus_validate_key(key: String) -> Result<NexusValidateResult, Stri
 }
 
 #[tauri::command]
-pub async fn nexus_get_trending() -> Result<Vec<NexusModInfo>, String> {
+pub async fn nexus_get_trending(state: State<'_, AppState>) -> Result<Vec<NexusModInfo>, String> {
     let api_key = get_saved_api_key()?;
-    nexus_get(
+    let mods: Vec<NexusModInfo> = nexus_get(
         &format!("/games/{}/mods/trending.json", GAME_DOMAIN),
         &api_key,
     )
-    .await
+    .await?;
+    cache_nexus_mods(&state, &mods)?;
+    Ok(mods)
 }
 
 #[tauri::command]
-pub async fn nexus_get_latest_added() -> Result<Vec<NexusModInfo>, String> {
+pub async fn nexus_get_latest_added(
+    state: State<'_, AppState>,
+) -> Result<Vec<NexusModInfo>, String> {
     let api_key = get_saved_api_key()?;
-    nexus_get(
+    let mods: Vec<NexusModInfo> = nexus_get(
         &format!("/games/{}/mods/latest_added.json", GAME_DOMAIN),
         &api_key,
     )
-    .await
+    .await?;
+    cache_nexus_mods(&state, &mods)?;
+    Ok(mods)
 }
 
 #[tauri::command]
-pub async fn nexus_get_latest_updated() -> Result<Vec<NexusModInfo>, String> {
+pub async fn nexus_get_latest_updated(
+    state: State<'_, AppState>,
+) -> Result<Vec<NexusModInfo>, String> {
     let api_key = get_saved_api_key()?;
-    nexus_get(
+    let mods: Vec<NexusModInfo> = nexus_get(
         &format!("/games/{}/mods/latest_updated.json", GAME_DOMAIN),
         &api_key,
     )
-    .await
+    .await?;
+    cache_nexus_mods(&state, &mods)?;
+    Ok(mods)
 }
 
 #[tauri::command]
-pub async fn nexus_get_mod(mod_id: u64) -> Result<NexusModInfo, String> {
-    let api_key = get_saved_api_key()?;
-    nexus_get(
-        &format!("/games/{}/mods/{}.json", GAME_DOMAIN, mod_id),
-        &api_key,
-    )
-    .await
+pub async fn nexus_get_mod(
+    mod_id: u64,
+    state: State<'_, AppState>,
+) -> Result<NexusModInfo, String> {
+    fetch_mod_by_id(mod_id, &state).await
 }
 
 #[tauri::command]
@@ -197,4 +338,51 @@ pub async fn nexus_get_mod_files(mod_id: u64) -> Result<Vec<NexusFileInfo>, Stri
     )
     .await?;
     Ok(response.files)
+}
+
+#[tauri::command]
+pub async fn nexus_find_mod_by_name(
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<Option<NexusModInfo>, String> {
+    let lookup = name.trim();
+    if lookup.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(local_mod) = find_local_mod(lookup, &state) else {
+        return Ok(None);
+    };
+
+    if let Some(nexus_id) = local_mod.nexus_id {
+        let cached_mods = read_cached_nexus_mods(&state)?;
+        if let Some(exact_id_match) = cached_mods
+            .iter()
+            .find(|mod_info| mod_info.mod_id == nexus_id)
+            .cloned()
+        {
+            return Ok(Some(exact_id_match));
+        }
+
+        match fetch_mod_by_id(nexus_id, &state).await {
+            Ok(mod_info) => return Ok(Some(mod_info)),
+            Err(error) => {
+                eprintln!(
+                    "Failed to resolve nexus_id {} directly from Nexus API: {}",
+                    nexus_id, error
+                );
+            }
+        }
+    }
+
+    if let Err(error) = ensure_cached_mod_lists(&state).await {
+        eprintln!("Failed to prime Nexus cache: {}", error);
+    }
+
+    let cached_mods = read_cached_nexus_mods(&state)?;
+    Ok(find_matching_cached_mod(&local_mod, &cached_mods).or_else(|| {
+        cached_mods
+            .into_iter()
+            .find(|mod_info| normalize_match_text(&mod_info.name) == normalize_match_text(lookup))
+    }))
 }
