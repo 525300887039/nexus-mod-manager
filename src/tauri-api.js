@@ -102,6 +102,18 @@ window.api = {
   clearTranslationCache: () => invoke('translation_cache_clear'),
   loadTranslations: () => invoke('translations_load'),
   saveTranslations: (data) => invoke('translations_save', { data }),
+  loadNexusTranslations: () => invoke('nexus_translations_load'),
+  saveNexusTranslations: (data) => invoke('nexus_translations_save', { data }),
+
+  // Nexus API
+  nexusValidateKey: (key) => invoke('nexus_validate_key', { key }),
+  nexusGetTrending: () => invoke('nexus_get_trending'),
+  nexusGetLatestAdded: () => invoke('nexus_get_latest_added'),
+  nexusGetLatestUpdated: () => invoke('nexus_get_latest_updated'),
+  nexusGetMod: (modId) => invoke('nexus_get_mod', { modId }),
+  nexusGetModFiles: (modId) => invoke('nexus_get_mod_files', { modId }),
+  saveNexusKey: (key) => invoke('config_save_nexus_key', { key }),
+  getNexusKey: () => invoke('config_get_nexus_key'),
 
   // Saves
   scanSaves: () => invoke('saves_scan'),

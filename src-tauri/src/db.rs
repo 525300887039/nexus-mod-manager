@@ -1,6 +1,6 @@
 use crate::{config, mods, AppState};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,12 @@ pub(crate) struct SavedTranslationRow {
     pub desc_translated: Option<String>,
     pub source_name: Option<String>,
     pub source_desc: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct NexusSavedTranslationRow {
+    pub name_translated: Option<String>,
+    pub desc_translated: Option<String>,
 }
 
 fn app_data_dir() -> Result<PathBuf, String> {
@@ -183,6 +189,79 @@ pub(crate) fn saved_translations_load_db(
     for row in rows {
         let (mod_id, entry) = row.map_err(|e| format!("解析已保存翻译失败: {}", e))?;
         result.insert(mod_id, entry);
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn nexus_saved_translation_upsert_db(
+    db: &Connection,
+    mod_key: &str,
+    name_translated: Option<&str>,
+    desc_translated: Option<&str>,
+) -> Result<(), String> {
+    let mod_key = mod_key.trim();
+    if mod_key.is_empty() {
+        return Err("nexus translation key 不能为空".to_string());
+    }
+
+    let name_translated = normalize_optional_text(name_translated);
+    let desc_translated = normalize_optional_text(desc_translated);
+
+    if name_translated.is_none() && desc_translated.is_none() {
+        return Ok(());
+    }
+
+    let now = now_millis();
+    db.execute(
+        "INSERT INTO nexus_saved_translations (
+           mod_key,
+           name_translated,
+           desc_translated,
+           updated_at
+         )
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(mod_key) DO UPDATE SET
+           name_translated = COALESCE(excluded.name_translated, nexus_saved_translations.name_translated),
+           desc_translated = COALESCE(excluded.desc_translated, nexus_saved_translations.desc_translated),
+           updated_at = excluded.updated_at",
+        params![
+            mod_key,
+            name_translated.as_deref(),
+            desc_translated.as_deref(),
+            now
+        ],
+    )
+    .map_err(|e| format!("写入 Nexus 已保存翻译失败: {}", e))?;
+
+    Ok(())
+}
+
+pub(crate) fn nexus_saved_translations_load_db(
+    db: &Connection,
+) -> Result<HashMap<String, NexusSavedTranslationRow>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT mod_key, name_translated, desc_translated
+             FROM nexus_saved_translations",
+        )
+        .map_err(|e| format!("准备 Nexus 已保存翻译查询失败: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                NexusSavedTranslationRow {
+                    name_translated: row.get::<_, Option<String>>(1)?,
+                    desc_translated: row.get::<_, Option<String>>(2)?,
+                },
+            ))
+        })
+        .map_err(|e| format!("读取 Nexus 已保存翻译失败: {}", e))?;
+
+    let mut result = HashMap::new();
+    for row in rows {
+        let (mod_key, entry) = row.map_err(|e| format!("解析 Nexus 已保存翻译失败: {}", e))?;
+        result.insert(mod_key, entry);
     }
 
     Ok(result)
@@ -358,6 +437,12 @@ pub fn init_db(_app_handle: &tauri::AppHandle) -> Result<Connection, String> {
            source_desc TEXT,
            updated_at INTEGER NOT NULL
          );
+         CREATE TABLE IF NOT EXISTS nexus_saved_translations (
+           mod_key TEXT PRIMARY KEY,
+           name_translated TEXT,
+           desc_translated TEXT,
+           updated_at INTEGER NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS nexus_mod_cache (
            mod_id INTEGER PRIMARY KEY,
            data_json TEXT NOT NULL,
@@ -407,10 +492,7 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
         };
         let name_translated = legacy_entry.get("name").and_then(|value| value.as_str());
         let desc_translated = legacy_entry.get("desc").and_then(|value| value.as_str());
-        let (source_name, source_desc) = mod_lookup
-            .get(key)
-            .cloned()
-            .unwrap_or((None, None));
+        let (source_name, source_desc) = mod_lookup.get(key).cloned().unwrap_or((None, None));
 
         saved_translation_upsert_db(
             &tx,
@@ -450,6 +532,66 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
             e
         )
     })?;
+
+    Ok(())
+}
+
+fn collect_nexus_translation_map(state: &tauri::State<'_, AppState>) -> Result<Value, String> {
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| format!("数据库锁已损坏: {}", e))?;
+    let saved_translations = nexus_saved_translations_load_db(&db)?;
+    let mut result = Map::new();
+
+    for (mod_key, saved_row) in saved_translations {
+        let mut entry = Map::new();
+
+        if let Some(translated) = saved_row.name_translated {
+            entry.insert("name".to_string(), Value::String(translated));
+        }
+
+        if let Some(translated) = saved_row.desc_translated {
+            entry.insert("desc".to_string(), Value::String(translated));
+        }
+
+        if !entry.is_empty() {
+            result.insert(mod_key, Value::Object(entry));
+        }
+    }
+
+    Ok(Value::Object(result))
+}
+
+fn persist_nexus_translation_map(
+    state: &tauri::State<'_, AppState>,
+    data: &Value,
+) -> Result<(), String> {
+    let Some(entries) = data.as_object() else {
+        return Err("nexus_translations_save 需要对象格式数据".to_string());
+    };
+
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| format!("数据库锁已损坏: {}", e))?;
+
+    for (mod_key, value) in entries {
+        if !mod_key.starts_with("nexus:") {
+            continue;
+        }
+
+        let Some(entry) = value.as_object() else {
+            continue;
+        };
+
+        nexus_saved_translation_upsert_db(
+            &db,
+            mod_key,
+            entry.get("name").and_then(|value| value.as_str()),
+            entry.get("desc").and_then(|value| value.as_str()),
+        )?;
+    }
 
     Ok(())
 }
@@ -502,4 +644,26 @@ pub fn translation_cache_count(state: tauri::State<'_, AppState>) -> Result<u64,
 pub fn translation_cache_clear(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let db = lock_db(&state)?;
     translation_cache_clear_db(&db)
+}
+
+#[tauri::command]
+pub fn nexus_translations_load(state: tauri::State<'_, AppState>) -> Value {
+    match collect_nexus_translation_map(&state) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("nexus_translations_load failed: {}", err);
+            serde_json::json!({})
+        }
+    }
+}
+
+#[tauri::command]
+pub fn nexus_translations_save(state: tauri::State<'_, AppState>, data: Value) -> Value {
+    match persist_nexus_translation_map(&state, &data) {
+        Ok(()) => serde_json::json!({ "success": true }),
+        Err(err) => {
+            eprintln!("nexus_translations_save failed: {}", err);
+            serde_json::json!({ "success": false, "error": err })
+        }
+    }
 }

@@ -3,6 +3,7 @@ mod db;
 mod game;
 mod logs;
 mod mods;
+mod nexus_api;
 mod profiles;
 mod saves;
 mod translate;
@@ -51,6 +52,8 @@ pub fn run() {
             // App
             config::app_init,
             config::app_select_game_path,
+            config::config_save_nexus_key,
+            config::config_get_nexus_key,
             // Window
             window_minimize,
             window_maximize,
@@ -91,9 +94,18 @@ pub fn run() {
             db::translation_cache_batch_get,
             db::translation_cache_count,
             db::translation_cache_clear,
+            db::nexus_translations_load,
+            db::nexus_translations_save,
             // Translations persistence
             translations::translations_load,
             translations::translations_save,
+            // Nexus Mods
+            nexus_api::nexus_validate_key,
+            nexus_api::nexus_get_trending,
+            nexus_api::nexus_get_latest_added,
+            nexus_api::nexus_get_latest_updated,
+            nexus_api::nexus_get_mod,
+            nexus_api::nexus_get_mod_files,
             // Saves
             saves::saves_scan,
             saves::saves_export,
