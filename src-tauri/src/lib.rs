@@ -23,7 +23,7 @@ pub struct AppState {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
@@ -117,19 +117,25 @@ pub fn run() {
             saves::saves_import,
             saves::saves_delete_backup,
         ])
-        .run(tauri::generate_context!())
-        .unwrap_or_else(|e| {
-            eprintln!("Tauri error: {}", e);
-            let log_dir = dirs::config_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("STS2ModManager");
-            let log_path = log_dir.join("launch.log");
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log_path) {
-                use std::io::Write;
-                let _ = writeln!(f, "Tauri error: {}", e);
-            }
-            panic!("Tauri error: {}", e);
-        });
+        .run(tauri::generate_context!());
+
+    if let Err(e) = app {
+        eprintln!("Tauri error: {}", e);
+        let log_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("STS2ModManager");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_path = log_dir.join("launch.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "Tauri error: {}", e);
+        }
+        std::process::exit(1);
+    }
 }
 
 // ── Window commands ──
@@ -159,10 +165,22 @@ fn get_appdata_dir() -> Option<std::path::PathBuf> {
     dirs::config_dir()
 }
 
+fn current_game_path(state: &tauri::State<'_, AppState>) -> Option<String> {
+    state
+        .game_path
+        .lock()
+        .map(|game_path| game_path.clone())
+        .map_err(|e| {
+            eprintln!("Game path state lock is poisoned: {}", e);
+            e
+        })
+        .ok()
+        .flatten()
+}
+
 #[tauri::command]
 fn shell_open_mods_dir(state: tauri::State<'_, AppState>) {
-    let gp = state.game_path.lock().unwrap();
-    if let Some(ref p) = *gp {
+    if let Some(ref p) = current_game_path(&state) {
         let mods_dir = std::path::Path::new(p).join("mods");
         if mods_dir.exists() {
             let _ = opener::open(mods_dir.to_string_lossy().to_string());
@@ -172,8 +190,7 @@ fn shell_open_mods_dir(state: tauri::State<'_, AppState>) {
 
 #[tauri::command]
 fn shell_open_game_dir(state: tauri::State<'_, AppState>) {
-    let gp = state.game_path.lock().unwrap();
-    if let Some(ref p) = *gp {
+    if let Some(ref p) = current_game_path(&state) {
         let _ = opener::open(p.clone());
     }
 }

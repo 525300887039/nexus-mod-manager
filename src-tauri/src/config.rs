@@ -8,7 +8,7 @@ use tauri_plugin_dialog::DialogExt;
 pub struct Config {
     #[serde(rename = "gamePath")]
     pub game_path: Option<String>,
-    #[serde(rename = "nexusApiKey")]
+    #[serde(rename = "nexusApiKey", alias = "nexus_api_key")]
     pub nexus_api_key: Option<String>,
 }
 
@@ -130,8 +130,11 @@ pub fn app_init(state: tauri::State<'_, AppState>) -> InitResult {
     let detected = resolve_game_path_from_config(&cfg);
 
     if let Some(ref gp) = detected {
-        let mut state_gp = state.game_path.lock().unwrap();
-        *state_gp = Some(gp.clone());
+        if let Ok(mut state_gp) = state.game_path.lock() {
+            *state_gp = Some(gp.clone());
+        } else {
+            eprintln!("Failed to cache detected game path in AppState");
+        }
         // Persist if auto-detected
         if cfg.game_path.as_deref() != Some(gp.as_str()) {
             let mut new_cfg = cfg;
@@ -164,7 +167,10 @@ pub async fn app_select_game_path(
     if let Some(folder_path) = folder {
         let gp = folder_path.to_string();
         {
-            let mut state_gp = state.game_path.lock().unwrap();
+            let mut state_gp = state
+                .game_path
+                .lock()
+                .map_err(|e| format!("游戏路径状态锁已损坏: {}", e))?;
             *state_gp = Some(gp.clone());
         }
 

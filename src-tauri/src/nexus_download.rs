@@ -23,6 +23,15 @@ struct NexusDownloadStatePayload {
     file_name: Option<String>,
 }
 
+fn current_game_path(app: &AppHandle) -> Result<Option<String>, String> {
+    let state = app.state::<AppState>();
+    state
+        .game_path
+        .lock()
+        .map(|game_path| game_path.clone())
+        .map_err(|e| format!("游戏路径状态锁已损坏: {}", e))
+}
+
 fn emit_download_state(
     app: &AppHandle,
     phase: &'static str,
@@ -179,6 +188,13 @@ pub async fn nexus_open_download_page(
                     }
                 };
 
+                if !archive_path.exists() {
+                    let message = format!("下载完成后未找到文件: {}", file_name);
+                    emit_download_state(&app_handle, "error", &message, Some(file_name.clone()));
+                    let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
+                    return true;
+                }
+
                 if !is_zip_archive(&archive_path) {
                     let message = format!(
                         "{} 已下载到临时目录，但不是 ZIP 文件，请手动解压或安装",
@@ -201,7 +217,20 @@ pub async fn nexus_open_download_page(
                     Some(file_name.clone()),
                 );
 
-                let game_path = app_handle.state::<AppState>().game_path.lock().unwrap().clone();
+                let game_path = match current_game_path(&app_handle) {
+                    Ok(game_path) => game_path,
+                    Err(message) => {
+                        emit_download_state(
+                            &app_handle,
+                            "error",
+                            &message,
+                            Some(file_name.clone()),
+                        );
+                        let _ =
+                            app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
+                        return true;
+                    }
+                };
                 let Some(game_path) = game_path else {
                     let message = "尚未设置游戏目录，无法自动安装".to_string();
                     emit_download_state(
@@ -215,6 +244,22 @@ pub async fn nexus_open_download_page(
                 };
 
                 let mods_dir = Path::new(&game_path).join("mods");
+                if let Err(error) = fs::create_dir_all(&mods_dir) {
+                    let message = format!(
+                        "无法创建 Mod 安装目录 {}: {}",
+                        mods_dir.display(),
+                        error
+                    );
+                    emit_download_state(
+                        &app_handle,
+                        "error",
+                        &message,
+                        Some(file_name.clone()),
+                    );
+                    let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
+                    return true;
+                }
+
                 let archive_path_str = archive_path.to_string_lossy().to_string();
                 match smart_extract_zip(&archive_path_str, &mods_dir) {
                     Ok(_) => {
