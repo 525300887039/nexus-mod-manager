@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default capability set for the main app window only. External Nexus content must not receive IPC access.","local":true,"windows":["main"],"permissions":["core:default","core:event:default","core:window:allow-create","core:window:allow-close","dialog:default","fs:default","opener:default"]}}

@@ -98,19 +98,24 @@ pub async fn nexus_open_download_page(
         format!("https://www.nexusmods.com/slaythespire2/mods/{mod_id}?tab=files")
     };
 
-    if let Some(existing) = app.get_webview_window(DOWNLOAD_WINDOW_LABEL) {
-        let _ = existing.close();
-    }
-
     let app_handle = app.clone();
     let external_url = url
         .parse()
         .map_err(|error| format!("无效的 Nexus 下载地址: {}", error))?;
 
+    if let Some(existing) = app.get_webview_window(DOWNLOAD_WINDOW_LABEL) {
+        existing
+            .navigate(external_url)
+            .map_err(|error| format!("切换 Nexus 下载页面失败: {}", error))?;
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
     WebviewWindowBuilder::new(
         &app,
         DOWNLOAD_WINDOW_LABEL,
-        WebviewUrl::External(external_url),
+        WebviewUrl::External(external_url.clone()),
     )
     .title("Nexus Mods - 下载")
     .inner_size(1200.0, 800.0)
