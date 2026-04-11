@@ -7,6 +7,7 @@ import NexusBrowser from './components/NexusBrowser';
 import LogViewer from './components/LogViewer';
 import SaveManager from './components/SaveManager';
 import TitleBar from './components/TitleBar';
+import DownloadProgress from './components/DownloadProgress';
 import {
   Download, RefreshCw, Search, FolderOpen, Archive, UploadCloud, Play, Loader, X, AlertTriangle, Info,
   ToggleLeft, ToggleRight, Trash2, Layers, Save, ChevronDown, Package, LayoutGrid, List,
@@ -35,6 +36,8 @@ export default function App() {
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [translations, setTranslations] = useState({});
+  const [downloadStatus, setDownloadStatus] = useState(null);
+  const clearDownloadStatus = useCallback(() => setDownloadStatus(null), []);
 
   useEffect(() => {
     window.api.getGameState().then(setGameState);
@@ -58,10 +61,10 @@ export default function App() {
     if (!result.success && result.error) showToast(result.error, 'error');
   };
 
-  const showToast = (msg, type = 'success') => {
+  const showToast = useCallback((msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
-  };
+  }, []);
 
   const syncMods = useCallback((list) => {
     setMods(list);
@@ -88,6 +91,57 @@ export default function App() {
       }
     })();
   }, [syncMods]);
+
+  useEffect(() => {
+    const tauriEvent = window.__TAURI__?.event;
+    if (!tauriEvent?.listen) {
+      return undefined;
+    }
+
+    const unlistenState = tauriEvent.listen('nexus-download-state', (event) => {
+      if (event?.payload) {
+        setDownloadStatus(event.payload);
+      }
+    });
+
+    const unlistenSuccess = tauriEvent.listen('nexus-install-success', async (event) => {
+      const installedName = event?.payload || 'Nexus Mod';
+      setDownloadStatus({
+        phase: 'success',
+        message: `Mod 已安装: ${installedName}`,
+        fileName: installedName,
+      });
+      showToast(`Mod 已安装: ${installedName}`);
+      await refreshMods();
+    });
+
+    const unlistenError = tauriEvent.listen('nexus-install-error', (event) => {
+      const message = event?.payload || '安装失败';
+      setDownloadStatus({
+        phase: 'error',
+        message,
+        fileName: null,
+      });
+      showToast(`安装失败: ${message}`, 'error');
+    });
+
+    const unlistenFailed = tauriEvent.listen('nexus-download-failed', (event) => {
+      const message = event?.payload || '下载失败，请重试';
+      setDownloadStatus({
+        phase: 'error',
+        message,
+        fileName: null,
+      });
+      showToast(message, 'error');
+    });
+
+    return () => {
+      unlistenState.then((fn) => fn());
+      unlistenSuccess.then((fn) => fn());
+      unlistenError.then((fn) => fn());
+      unlistenFailed.then((fn) => fn());
+    };
+  }, [refreshMods, showToast]);
 
   const handleSelectGamePath = async () => {
     const info = await window.api.selectGamePath();
@@ -669,7 +723,13 @@ export default function App() {
           )}
 
           {page === 'saves' && <SaveManager />}
-          {page === 'nexus' && <NexusBrowser />}
+          {page === 'nexus' && (
+            <NexusBrowser
+              onRefreshMods={refreshMods}
+              onShowToast={showToast}
+              onNexusDownloadStatusChange={setDownloadStatus}
+            />
+          )}
           {page === 'logs' && <LogViewer />}
         </main>
       </div>
@@ -817,9 +877,16 @@ export default function App() {
         </div>
       )}
 
+      <DownloadProgress
+        status={downloadStatus}
+        onClose={clearDownloadStatus}
+      />
+
       {/* Toast */}
       {toast && (
-        <div className={`fixed bottom-6 right-6 px-4 py-3 rounded-xl shadow-lg text-sm font-medium z-50 transition-all ${
+        <div className={`fixed right-6 px-4 py-3 rounded-xl shadow-lg text-sm font-medium z-50 transition-all ${
+          downloadStatus ? 'bottom-24' : 'bottom-6'
+        } ${
           toast.type === 'error' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
         }`}>
           {toast.msg}

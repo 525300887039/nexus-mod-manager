@@ -139,7 +139,11 @@ function NexusModCard({ mod, translationEntry, translating, onClick, onTranslate
   );
 }
 
-export default function NexusBrowser() {
+export default function NexusBrowser({
+  onRefreshMods,
+  onShowToast,
+  onNexusDownloadStatusChange,
+}) {
   const nexusSupported = hasNexusBrowserSupport();
   const [apiKey, setApiKey] = useState('');
   const [initializing, setInitializing] = useState(true);
@@ -469,6 +473,9 @@ export default function NexusBrowser() {
           translationEntry={translations[getNexusTranslationKey(selectedMod.modId)]}
           onClose={() => setSelectedMod(null)}
           onTranslationsChange={setTranslations}
+          onRefreshMods={onRefreshMods}
+          onShowToast={onShowToast}
+          onNexusDownloadStatusChange={onNexusDownloadStatusChange}
         />
       )}
 

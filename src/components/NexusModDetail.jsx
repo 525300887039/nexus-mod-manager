@@ -41,6 +41,9 @@ export default function NexusModDetail({
   translationEntry,
   onClose,
   onTranslationsChange,
+  onRefreshMods,
+  onShowToast,
+  onNexusDownloadStatusChange,
 }) {
   const [detail, setDetail] = useState(mod);
   const [files, setFiles] = useState([]);
@@ -50,6 +53,8 @@ export default function NexusModDetail({
   const [translating, setTranslating] = useState(false);
   const [translateError, setTranslateError] = useState('');
   const [imageError, setImageError] = useState(false);
+  const [openingDownload, setOpeningDownload] = useState(false);
+  const [manualInstalling, setManualInstalling] = useState(false);
 
   useEffect(() => {
     setImageError(false);
@@ -99,6 +104,11 @@ export default function NexusModDetail({
   const translatedName = translationEntry?.name || '';
   const translatedDescription = translationEntry?.desc || '';
   const fileGroups = useMemo(() => groupFilesByCategory(files), [files]);
+  const preferredFile = useMemo(
+    () => files.find((file) => (file.categoryName || '').toUpperCase() === 'MAIN') || files[0] || null,
+    [files],
+  );
+  const autoDownloadSupported = typeof window.api?.openNexusDownload === 'function';
 
   const handleTranslate = async () => {
     setTranslating(true);
@@ -123,6 +133,65 @@ export default function NexusModDetail({
       setTranslateError(error?.message || String(error));
     } finally {
       setTranslating(false);
+    }
+  };
+
+  const handleOpenDownload = async (file = preferredFile) => {
+    const fileName = file?.fileName || file?.name || currentMod.name || 'Nexus Mod';
+
+    if (!autoDownloadSupported) {
+      const message = '当前运行环境不支持内嵌 Nexus 下载窗口';
+      onNexusDownloadStatusChange?.({
+        phase: 'error',
+        message,
+        fileName,
+      });
+      onShowToast?.(message, 'error');
+      return;
+    }
+
+    setOpeningDownload(true);
+    onNexusDownloadStatusChange?.({
+      phase: 'preparing',
+      message: `正在打开 ${fileName} 的下载页...`,
+      fileName,
+    });
+
+    try {
+      await window.api.openNexusDownload(currentMod.modId, file?.fileId ?? null);
+    } catch (error) {
+      const message = `打开下载窗口失败: ${error?.message || String(error)}`;
+      onNexusDownloadStatusChange?.({
+        phase: 'error',
+        message,
+        fileName,
+      });
+      onShowToast?.(message, 'error');
+    } finally {
+      setOpeningDownload(false);
+    }
+  };
+
+  const handleManualInstall = async () => {
+    setManualInstalling(true);
+
+    try {
+      const result = await window.api.installMod();
+      if (result.success) {
+        const installedNames = Array.isArray(result.installed) && result.installed.length > 0
+          ? result.installed.join(', ')
+          : '手动安装已完成';
+        onShowToast?.(`已安装: ${installedNames}`);
+        if (onRefreshMods) {
+          await onRefreshMods();
+        }
+      } else if (result.error && result.error !== 'Cancelled') {
+        onShowToast?.(result.error, 'error');
+      }
+    } catch (error) {
+      onShowToast?.(error?.message || String(error), 'error');
+    } finally {
+      setManualInstalling(false);
     }
   };
 
@@ -290,6 +359,17 @@ export default function NexusModDetail({
                         {file.description && (
                           <p className="mt-3 text-xs leading-6 text-gray-500">{file.description}</p>
                         )}
+                        <div className="mt-4 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDownload(file)}
+                            disabled={openingDownload || !autoDownloadSupported}
+                            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                          >
+                            {openingDownload ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                            下载安装
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -311,15 +391,25 @@ export default function NexusModDetail({
         </button>
         <button
           type="button"
-          disabled
-          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-medium text-gray-400"
+          onClick={() => handleOpenDownload()}
+          disabled={openingDownload || !autoDownloadSupported}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400"
         >
-          <Download size={16} />
-          下载安装
-          <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-500">
-            即将推出
-          </span>
+          {openingDownload ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+          {openingDownload ? '正在打开下载页...' : '下载安装'}
         </button>
+        <button
+          type="button"
+          onClick={handleManualInstall}
+          disabled={manualInstalling}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-400"
+        >
+          {manualInstalling ? <Loader2 size={16} className="animate-spin" /> : <FileArchive size={16} />}
+          {manualInstalling ? '正在选择文件...' : '手动安装'}
+        </button>
+        <p className="text-xs leading-5 text-gray-400">
+          如果自动下载不生效，请先在浏览器下载，再点击“手动安装”选择已下载的压缩包。
+        </p>
       </div>
     </aside>
   );
