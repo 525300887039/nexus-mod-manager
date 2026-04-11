@@ -1,4 +1,5 @@
 mod config;
+mod db;
 mod game;
 mod logs;
 mod mods;
@@ -11,6 +12,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 pub struct AppState {
+    pub db: Mutex<rusqlite::Connection>,
     pub game_path: Mutex<Option<String>>,
     pub game_state: Mutex<String>, // "idle" | "launching" | "running"
 }
@@ -20,9 +22,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(AppState {
-            game_path: Mutex::new(None),
-            game_state: Mutex::new("idle".to_string()),
+        .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
+            let mut db_conn = db::init_db(app.handle())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+            if let Err(err) = db::translations_migrate_json_to_db(&mut db_conn) {
+                eprintln!("Translation migration failed: {}", err);
+            }
+
+            app.manage(AppState {
+                db: Mutex::new(db_conn),
+                game_path: Mutex::new(None),
+                game_state: Mutex::new("idle".to_string()),
+            });
+
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             // App
@@ -59,6 +73,11 @@ pub fn run() {
             profiles::profiles_save,
             // Translate
             translate::translate_text,
+            db::translation_cache_get,
+            db::translation_cache_set,
+            db::translation_cache_batch_get,
+            db::translation_cache_count,
+            db::translation_cache_clear,
             // Translations persistence
             translations::translations_load,
             translations::translations_save,
