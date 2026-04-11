@@ -1,7 +1,29 @@
 export const NEXUS_TRANSLATION_PREFIX = 'nexus:';
+const REQUIRED_NEXUS_API_METHODS = [
+  'getNexusKey',
+  'saveNexusKey',
+  'nexusValidateKey',
+  'nexusGetTrending',
+  'nexusGetLatestAdded',
+  'nexusGetLatestUpdated',
+  'nexusGetMod',
+  'nexusGetModFiles',
+  'translateSmart',
+  'loadNexusTranslations',
+  'saveNexusTranslations',
+];
 
 export function getNexusTranslationKey(modId) {
   return `${NEXUS_TRANSLATION_PREFIX}${modId}`;
+}
+
+export function hasNexusBrowserSupport() {
+  const api = window.api;
+  if (!api || typeof api !== 'object') {
+    return false;
+  }
+
+  return REQUIRED_NEXUS_API_METHODS.every((method) => typeof api[method] === 'function');
 }
 
 export function isChineseText(text) {
@@ -55,7 +77,7 @@ export function getMembershipLabel(result) {
 }
 
 export async function loadNexusTranslationsMap() {
-  if (!window.api.loadNexusTranslations) {
+  if (!hasNexusBrowserSupport()) {
     return {};
   }
 
@@ -68,7 +90,7 @@ export async function loadNexusTranslationsMap() {
 }
 
 export async function saveNexusTranslationsMap(data) {
-  if (!window.api.saveNexusTranslations) {
+  if (!hasNexusBrowserSupport()) {
     throw new Error('Nexus 翻译存储未启用');
   }
 
@@ -76,7 +98,6 @@ export async function saveNexusTranslationsMap(data) {
   if (result?.success === false) {
     throw new Error(result.error || '保存 Nexus 翻译失败');
   }
-
   return result;
 }
 
@@ -148,6 +169,7 @@ export async function translateNexusModFields({
   return {
     success: true,
     updates,
+    translationKey,
     translations: translationMap,
     error: errors[0] || null,
   };

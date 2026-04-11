@@ -15,6 +15,7 @@ import NexusSettings from './NexusSettings';
 import {
   formatCompactNumber,
   getNexusTranslationKey,
+  hasNexusBrowserSupport,
   loadNexusTranslationsMap,
   translateNexusModFields,
 } from './nexusShared';
@@ -139,6 +140,7 @@ function NexusModCard({ mod, translationEntry, translating, onClick, onTranslate
 }
 
 export default function NexusBrowser() {
+  const nexusSupported = hasNexusBrowserSupport();
   const [apiKey, setApiKey] = useState('');
   const [initializing, setInitializing] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
@@ -216,6 +218,14 @@ export default function NexusBrowser() {
     let cancelled = false;
 
     (async () => {
+      if (!nexusSupported) {
+        if (!cancelled) {
+          setInitializing(false);
+          setShowSettings(false);
+        }
+        return;
+      }
+
       try {
         const [savedKey, savedTranslations] = await Promise.all([
           window.api.getNexusKey(),
@@ -244,7 +254,7 @@ export default function NexusBrowser() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [nexusSupported]);
 
   const filteredMods = useMemo(() => {
     const keyword = deferredSearch.trim().toLowerCase();
@@ -315,26 +325,28 @@ export default function NexusBrowser() {
                 浏览 Slay the Spire 2 在 Nexus Mods 上的热门、新增和最近更新内容。
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              {hasApiKey && (
+            {nexusSupported && (
+              <div className="flex items-center gap-2">
+                {hasApiKey && (
+                  <button
+                    type="button"
+                    onClick={() => fetchTab(activeTab, { force: true })}
+                    className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    <RefreshCw size={16} className={activeState.loading ? 'animate-spin' : ''} />
+                    刷新
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => fetchTab(activeTab, { force: true })}
-                  className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  onClick={() => setShowSettings((current) => !current)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
                 >
-                  <RefreshCw size={16} className={activeState.loading ? 'animate-spin' : ''} />
-                  刷新
+                  <Settings2 size={16} />
+                  {showSettings ? '收起 API Key' : 'API Key 设置'}
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setShowSettings((current) => !current)}
-                className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
-              >
-                <Settings2 size={16} />
-                {showSettings ? '收起 API Key' : 'API Key 设置'}
-              </button>
-            </div>
+              </div>
+            )}
           </div>
 
           {showSettings && (
@@ -343,7 +355,17 @@ export default function NexusBrowser() {
             </div>
           )}
 
-          {initializing ? (
+          {!nexusSupported ? (
+            <div className="rounded-3xl border border-amber-100 bg-amber-50 px-8 py-12 text-center shadow-sm">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                <AlertTriangle size={24} />
+              </div>
+              <h2 className="mt-5 text-xl font-semibold text-gray-900">当前运行环境不支持 Nexus 浏览</h2>
+              <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-gray-600">
+                这个页面依赖 Tauri 侧的 Nexus Mods bridge。你当前打开的是 Electron 运行时，它没有接入这些 API，因此这里只显示只读提示，避免进入页面后直接报错。
+              </p>
+            </div>
+          ) : initializing ? (
             <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-gray-100 bg-white">
               <div className="flex items-center gap-3 text-sm text-gray-500">
                 <Loader2 size={18} className="animate-spin" />
