@@ -6,6 +6,7 @@ import ModDetail from './components/ModDetail';
 import NexusBrowser from './components/NexusBrowser';
 import LogViewer from './components/LogViewer';
 import SaveManager from './components/SaveManager';
+import Settings from './components/Settings';
 import TitleBar from './components/TitleBar';
 import DownloadProgress from './components/DownloadProgress';
 import {
@@ -16,6 +17,7 @@ import {
 
 export default function App() {
   const [page, setPage] = useState('mods');
+  const [settingsTab, setSettingsTab] = useState('nexus');
   const [mods, setMods] = useState([]);
   const [selectedMod, setSelectedMod] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -64,6 +66,27 @@ export default function App() {
   const showToast = useCallback((msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const showConfirmDialog = useCallback(({ title, message, danger = false, onConfirm }) => {
+    setConfirmDialog({
+      title,
+      message,
+      danger,
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        if (onConfirm) {
+          await onConfirm();
+        }
+      },
+    });
+  }, []);
+
+  const handleNavigate = useCallback((nextPage, options = {}) => {
+    if (nextPage === 'settings' && options.tab) {
+      setSettingsTab(options.tab);
+    }
+    setPage(nextPage);
   }, []);
 
   const syncMods = useCallback((list) => {
@@ -365,7 +388,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
           page={page}
-          setPage={setPage}
+          setPage={handleNavigate}
           gamePath={gamePath}
           onSelectGamePath={handleSelectGamePath}
           enabledCount={enabledCount}
@@ -662,6 +685,7 @@ export default function App() {
                       onToggle={() => handleToggle(selectedMod)}
                       onUninstall={() => handleUninstall(selectedMod)}
                       onSelectMod={setSelectedMod}
+                      onShowToast={showToast}
                       onTranslationSaved={() => window.api.loadTranslations && window.api.loadTranslations().then(setTranslations)}
                     />
                   )}
@@ -715,6 +739,7 @@ export default function App() {
                       onToggle={() => handleToggle(selectedMod)}
                       onUninstall={() => handleUninstall(selectedMod)}
                       onSelectMod={setSelectedMod}
+                      onShowToast={showToast}
                       onTranslationSaved={() => window.api.loadTranslations && window.api.loadTranslations().then(setTranslations)}
                     />
                   ) : (
@@ -731,12 +756,21 @@ export default function App() {
           {page === 'saves' && <SaveManager />}
           {page === 'nexus' && (
             <NexusBrowser
+              onNavigate={handleNavigate}
               onRefreshMods={refreshMods}
               onShowToast={showToast}
               onNexusDownloadStatusChange={setDownloadStatus}
             />
           )}
           {page === 'logs' && <LogViewer />}
+          {page === 'settings' && (
+            <Settings
+              activeTab={settingsTab}
+              onTabChange={setSettingsTab}
+              onShowToast={showToast}
+              onConfirm={showConfirmDialog}
+            />
+          )}
         </main>
       </div>
 

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Eye, EyeOff, ExternalLink, KeyRound, Loader2, Save, ShieldCheck } from 'lucide-react';
 import { getMembershipLabel } from './nexusShared';
 
-export default function NexusSettings({ initialKey = '', onSaved, compact = false }) {
+export default function NexusSettings({ initialKey = '', onSaved, compact = false, onShowToast }) {
   const [key, setKey] = useState(initialKey || '');
   const [showKey, setShowKey] = useState(false);
   const [validating, setValidating] = useState(false);
@@ -13,11 +13,38 @@ export default function NexusSettings({ initialKey = '', onSaved, compact = fals
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
-    setKey(initialKey || '');
+    let cancelled = false;
     setValidatedKey('');
     setValidationResult(null);
     setValidationError('');
     setStatus(null);
+
+    if (initialKey) {
+      setKey(initialKey);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (typeof window.api?.getNexusKey === 'function') {
+      window.api.getNexusKey()
+        .then((savedKey) => {
+          if (!cancelled) {
+            setKey(savedKey || '');
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setKey('');
+          }
+        });
+    } else {
+      setKey('');
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, [initialKey]);
 
   const normalizedKey = key.trim();
@@ -68,6 +95,7 @@ export default function NexusSettings({ initialKey = '', onSaved, compact = fals
     try {
       await window.api.saveNexusKey(normalizedKey);
       setStatus({ type: 'success', message: 'Nexus Mods API Key 已保存。' });
+      onShowToast?.('Nexus Mods API Key 已保存。');
       if (onSaved) {
         onSaved(normalizedKey, validationResult);
       }
