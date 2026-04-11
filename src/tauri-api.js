@@ -91,6 +91,10 @@ window.api = {
 
   // Translate
   translateText: (text) => invoke('translate_text', { text }),
+  translateSmart: (text) => invoke('translate_smart', { text }),
+  translateLlm: (text) => invoke('translate_llm', { text }),
+  loadLlmConfig: () => invoke('translate_llm_config_load'),
+  saveLlmConfig: (config) => invoke('translate_llm_config_save', { config }),
   getCachedTranslation: (text) => invoke('translation_cache_get', { sourceText: text }),
   setCachedTranslation: (text, translated, provider) => invoke('translation_cache_set', { sourceText: text, translated, provider }),
   batchGetTranslations: (texts) => invoke('translation_cache_batch_get', { texts }),
