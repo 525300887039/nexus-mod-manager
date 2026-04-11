@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar';
 import ModCard from './components/ModCard';
 import ModListItem from './components/ModListItem';
 import ModDetail from './components/ModDetail';
+import NexusBrowser from './components/NexusBrowser';
 import LogViewer from './components/LogViewer';
 import SaveManager from './components/SaveManager';
 import TitleBar from './components/TitleBar';
@@ -668,6 +669,7 @@ export default function App() {
           )}
 
           {page === 'saves' && <SaveManager />}
+          {page === 'nexus' && <NexusBrowser />}
           {page === 'logs' && <LogViewer />}
         </main>
       </div>
