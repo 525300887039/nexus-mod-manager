@@ -6,6 +6,8 @@ mod mods;
 mod profiles;
 mod saves;
 mod translate;
+mod translate_engine;
+mod translate_llm;
 mod translations;
 
 use std::sync::Mutex;
@@ -30,7 +32,9 @@ pub fn run() {
                 eprintln!("Translation migration failed: {}", err);
             }
             if let Some(game_path) = config::load_or_detect_game_path() {
-                if let Err(err) = db::sync_saved_translations_with_game_path_db(&mut db_conn, &game_path) {
+                if let Err(err) =
+                    db::sync_saved_translations_with_game_path_db(&mut db_conn, &game_path)
+                {
                     eprintln!("Saved translation sync failed: {}", err);
                 }
             }
@@ -78,6 +82,10 @@ pub fn run() {
             profiles::profiles_save,
             // Translate
             translate::translate_text,
+            translate_engine::translate_smart,
+            translate_llm::translate_llm,
+            translate_llm::translate_llm_config_save,
+            translate_llm::translate_llm_config_load,
             db::translation_cache_get,
             db::translation_cache_set,
             db::translation_cache_batch_get,
