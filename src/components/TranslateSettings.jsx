@@ -66,7 +66,7 @@ function buildPayload(config) {
   };
 }
 
-export default function TranslateSettings() {
+export default function TranslateSettings({ embedded = false, onShowToast, onConfirm }) {
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -104,6 +104,7 @@ export default function TranslateSettings() {
       setConfig(normalizeConfig(loadedConfig));
       setCacheCount(count);
       setCacheError('');
+      setStatus(null);
     } catch (error) {
       setStatus({
         type: 'error',
@@ -125,11 +126,9 @@ export default function TranslateSettings() {
       await window.api.saveLlmConfig(buildPayload(config));
       const latest = normalizeConfig(await window.api.loadLlmConfig());
       setConfig(latest);
+      setStatus(null);
       if (!silent) {
-        setStatus({
-          type: 'success',
-          message: '翻译设置已保存到本地配置。',
-        });
+        onShowToast?.('翻译设置已保存到本地配置。');
       }
       return true;
     } catch (error) {
@@ -182,304 +181,338 @@ export default function TranslateSettings() {
   };
 
   const handleClearCache = async () => {
-    const confirmed = window.confirm('确定清空全部翻译缓存吗？此操作不可撤销。');
-    if (!confirmed) {
+    const clearCache = async () => {
+      try {
+        await window.api.clearTranslationCache();
+        await refreshCacheCount();
+        setStatus(null);
+        onShowToast?.('翻译缓存已清空。');
+      } catch (error) {
+        setStatus({
+          type: 'error',
+          message: `清理翻译缓存失败: ${error?.message || String(error)}`,
+        });
+      }
+    };
+
+    if (onConfirm) {
+      onConfirm({
+        title: '清除翻译缓存',
+        message: '确定清空全部翻译缓存吗？此操作不可撤销。',
+        danger: true,
+        onConfirm: clearCache,
+      });
       return;
     }
 
-    try {
-      await window.api.clearTranslationCache();
-      await refreshCacheCount();
-      setStatus({
-        type: 'success',
-        message: '翻译缓存已清空。',
-      });
-    } catch (error) {
-      setStatus({
-        type: 'error',
-        message: `清理翻译缓存失败: ${error?.message || String(error)}`,
-      });
+    const confirmed = window.confirm('确定清空全部翻译缓存吗？此操作不可撤销。');
+    if (confirmed) {
+      await clearCache();
     }
   };
 
   const providerMeta = getProviderMeta(testResult?.provider);
-
-  return (
-    <div className="flex-1 overflow-y-auto bg-gray-50">
-      <div className="mx-auto max-w-6xl px-6 py-8">
-        <div className="mb-6 flex items-end justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-400">Translation Control</p>
-            <h1 className="mt-2 text-3xl font-bold text-gray-900">翻译引擎设置</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
-              统一管理 SQLite 缓存、MyMemory 免费翻译和自定义大模型翻译链路。所有网络请求都在 Rust 端发起，不受 WebView CSP 限制。
-            </p>
-          </div>
-          <button
-            onClick={loadData}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            重新加载
-          </button>
+  const header = embedded ? null : (
+    <div className="mb-6 flex items-end justify-between gap-4">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-400">Translation Control</p>
+        <h1 className="mt-2 text-3xl font-bold text-gray-900">翻译引擎设置</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
+          统一管理 SQLite 缓存、MyMemory 免费翻译和自定义大模型翻译链路。所有网络请求都在 Rust 端发起，不受 WebView CSP 限制。
+        </p>
+      </div>
+      <button
+        onClick={loadData}
+        disabled={loading}
+        className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+        重新加载
+      </button>
+    </div>
+  );
+  const embeddedToolbar = embedded ? (
+    <div className="mb-4 flex justify-end">
+      <button
+        onClick={loadData}
+        disabled={loading}
+        className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+        重新加载
+      </button>
+    </div>
+  ) : null;
+  const content = (
+    <>
+      {embeddedToolbar}
+      {status && (
+        <div
+          className={`mb-6 rounded-xl border px-4 py-3 text-sm ${
+            status.type === 'success'
+              ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
+              : 'border-red-100 bg-red-50 text-red-700'
+          }`}
+        >
+          {status.message}
         </div>
+      )}
 
-        {status && (
-          <div
-            className={`mb-6 rounded-xl border px-4 py-3 text-sm ${
-              status.type === 'success'
-                ? 'border-emerald-100 bg-emerald-50 text-emerald-700'
-                : 'border-red-100 bg-red-50 text-red-700'
-            }`}
-          >
-            {status.message}
+      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <section className="rounded-2xl border border-gray-100 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-6 py-5">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gray-900 text-white">
+                <Languages size={20} />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">引擎策略</h2>
+                <p className="mt-1 text-sm text-gray-500">选择翻译优先级，并配置自定义 OpenAI 兼容接口。</p>
+              </div>
+            </div>
           </div>
-        )}
 
-        <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+          <div className="space-y-6 px-6 py-6">
+            <div className="grid gap-3">
+              {ENGINE_OPTIONS.map((option) => (
+                <label
+                  key={option.value}
+                  className={`cursor-pointer rounded-xl border p-4 transition-all ${
+                    config.engineMode === option.value
+                      ? 'border-gray-900 bg-gray-900 text-white shadow-lg shadow-gray-900/10'
+                      : 'border-gray-200 bg-white text-gray-900 hover:border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="radio"
+                      name="engineMode"
+                      value={option.value}
+                      checked={config.engineMode === option.value}
+                      onChange={(event) => {
+                        setConfig((current) => ({
+                          ...current,
+                          engineMode: event.target.value,
+                        }));
+                      }}
+                      className="mt-1 h-4 w-4 border-gray-300 text-gray-900 focus:ring-gray-900"
+                    />
+                    <div>
+                      <p className="text-sm font-semibold">{option.title}</p>
+                      <p className={`mt-1 text-sm leading-6 ${config.engineMode === option.value ? 'text-gray-200' : 'text-gray-500'}`}>
+                        {option.subtitle}
+                      </p>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            {includesLlm && (
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/80 p-5">
+                <div className="mb-5">
+                  <h3 className="text-sm font-semibold text-gray-900">大模型 API 配置</h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    配置会保存到本地 `%APPDATA%/STS2ModManager/llm_config.json`。支持 OpenAI、兼容网关和本地 Ollama。
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">API 地址</span>
+                    <input
+                      type="text"
+                      value={config.apiUrl}
+                      onChange={(event) => setConfig((current) => ({ ...current, apiUrl: event.target.value }))}
+                      placeholder="https://api.openai.com/v1/chat/completions"
+                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">API Key</span>
+                    <div className="relative">
+                      <input
+                        type={showApiKey ? 'text' : 'password'}
+                        value={config.apiKey}
+                        onChange={(event) => setConfig((current) => ({ ...current, apiKey: event.target.value }))}
+                        placeholder="sk-..."
+                        className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 pr-12 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey((current) => !current)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors hover:text-gray-700"
+                        aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
+                      >
+                        {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">模型名</span>
+                    <input
+                      type="text"
+                      value={config.model}
+                      onChange={(event) => setConfig((current) => ({ ...current, model: event.target.value }))}
+                      placeholder="gpt-4o-mini"
+                      className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">System Prompt</span>
+                    <textarea
+                      value={config.systemPrompt}
+                      onChange={(event) => setConfig((current) => ({ ...current, systemPrompt: event.target.value }))}
+                      rows={5}
+                      className="w-full resize-y rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
+                    />
+                  </label>
+
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-3">
+              <p className="text-sm text-gray-500">
+                {config.engineMode === 'dual' && '当前模式会优先使用 MyMemory，失败时再自动切到大模型。'}
+                {config.engineMode === 'llm' && '当前模式只会调用你配置的大模型接口。'}
+                {config.engineMode === 'mymemory' && '当前模式只会调用 MyMemory 免费翻译接口。'}
+              </p>
+              <button
+                onClick={() => persistConfig(false)}
+                disabled={saving}
+                className="inline-flex flex-shrink-0 items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Save size={15} />
+                {saving ? '保存中...' : '保存设置'}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <div className="space-y-6">
           <section className="rounded-2xl border border-gray-100 bg-white shadow-sm">
             <div className="border-b border-gray-100 px-6 py-5">
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gray-900 text-white">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500 text-white shadow-lg shadow-emerald-500/20">
                   <Languages size={20} />
                 </div>
                 <div>
-                  <h2 className="text-lg font-semibold text-gray-900">引擎策略</h2>
-                  <p className="mt-1 text-sm text-gray-500">选择翻译优先级，并配置自定义 OpenAI 兼容接口。</p>
+                  <h2 className="text-lg font-semibold text-gray-900">测试翻译</h2>
+                  <p className="mt-1 text-sm text-gray-500">会先保存当前表单，再调用 `translate_smart`，方便验证真实链路和来源。</p>
                 </div>
               </div>
             </div>
 
-            <div className="space-y-6 px-6 py-6">
-              <div className="grid gap-3">
-                {ENGINE_OPTIONS.map((option) => (
-                  <label
-                    key={option.value}
-                    className={`cursor-pointer rounded-xl border p-4 transition-all ${
-                      config.engineMode === option.value
-                        ? 'border-gray-900 bg-gray-900 text-white shadow-lg shadow-gray-900/10'
-                        : 'border-gray-200 bg-white text-gray-900 hover:border-gray-300 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <input
-                        type="radio"
-                        name="engineMode"
-                        value={option.value}
-                        checked={config.engineMode === option.value}
-                        onChange={(event) => {
-                          setConfig((current) => ({
-                            ...current,
-                            engineMode: event.target.value,
-                          }));
-                        }}
-                        className="mt-1 h-4 w-4 border-gray-300 text-gray-900 focus:ring-gray-900"
-                      />
-                      <div>
-                        <p className="text-sm font-semibold">{option.title}</p>
-                        <p className={`mt-1 text-sm leading-6 ${config.engineMode === option.value ? 'text-gray-200' : 'text-gray-500'}`}>
-                          {option.subtitle}
-                        </p>
-                      </div>
-                    </div>
-                  </label>
-                ))}
-              </div>
+            <div className="space-y-4 px-6 py-6">
+              <textarea
+                value={testText}
+                onChange={(event) => setTestText(event.target.value)}
+                rows={4}
+                placeholder="输入一段英文进行测试"
+                className="w-full resize-y rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:bg-white focus:ring-2 focus:ring-gray-900/5"
+              />
 
-              {includesLlm && (
-                <div className="rounded-2xl border border-gray-100 bg-gray-50/80 p-5">
-                  <div className="mb-5">
-                    <h3 className="text-sm font-semibold text-gray-900">大模型 API 配置</h3>
-                    <p className="mt-1 text-sm text-gray-500">
-                      配置会保存到本地 `%APPDATA%/STS2ModManager/llm_config.json`。支持 OpenAI、兼容网关和本地 Ollama。
-                    </p>
-                  </div>
+              <button
+                onClick={handleTestTranslate}
+                disabled={testing || saving}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Languages size={16} />
+                {testing ? '测试中...' : '测试'}
+              </button>
 
-                  <div className="space-y-4">
-                    <label className="block">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">API 地址</span>
-                      <input
-                        type="text"
-                        value={config.apiUrl}
-                        onChange={(event) => setConfig((current) => ({ ...current, apiUrl: event.target.value }))}
-                        placeholder="https://api.openai.com/v1/chat/completions"
-                        className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
-                      />
-                    </label>
-
-                    <label className="block">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">API Key</span>
-                      <div className="relative">
-                        <input
-                          type={showApiKey ? 'text' : 'password'}
-                          value={config.apiKey}
-                          onChange={(event) => setConfig((current) => ({ ...current, apiKey: event.target.value }))}
-                          placeholder="sk-..."
-                          className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 pr-12 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowApiKey((current) => !current)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors hover:text-gray-700"
-                          aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
-                        >
-                          {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                        </button>
-                      </div>
-                    </label>
-
-                    <label className="block">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">模型名</span>
-                      <input
-                        type="text"
-                        value={config.model}
-                        onChange={(event) => setConfig((current) => ({ ...current, model: event.target.value }))}
-                        placeholder="gpt-4o-mini"
-                        className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
-                      />
-                    </label>
-
-                    <label className="block">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">System Prompt</span>
-                      <textarea
-                        value={config.systemPrompt}
-                        onChange={(event) => setConfig((current) => ({ ...current, systemPrompt: event.target.value }))}
-                        rows={5}
-                        className="w-full resize-y rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
-                      />
-                    </label>
-
-                  </div>
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/80 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">结果</p>
+                  {testResult?.provider && (
+                    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${providerMeta.className}`}>
+                      {providerMeta.label}
+                    </span>
+                  )}
                 </div>
-              )}
 
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-3">
-                <p className="text-sm text-gray-500">
-                  {config.engineMode === 'dual' && '当前模式会优先使用 MyMemory，失败时再自动切到大模型。'}
-                  {config.engineMode === 'llm' && '当前模式只会调用你配置的大模型接口。'}
-                  {config.engineMode === 'mymemory' && '当前模式只会调用 MyMemory 免费翻译接口。'}
-                </p>
-                <button
-                  onClick={() => persistConfig(false)}
-                  disabled={saving}
-                  className="inline-flex flex-shrink-0 items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Save size={15} />
-                  {saving ? '保存中...' : '保存设置'}
-                </button>
+                {!testResult && (
+                  <p className="text-sm leading-6 text-gray-400">还没有测试结果。建议先用 “Hello World” 验证缓存与引擎切换。</p>
+                )}
+
+                {testResult?.success && (
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-emerald-100 bg-white px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-500">Translated</p>
+                      <p className="mt-2 text-sm leading-7 text-gray-800">{testResult.translated}</p>
+                    </div>
+                  </div>
+                )}
+
+                {testResult && !testResult.success && (
+                  <div className="rounded-xl border border-red-100 bg-white px-4 py-3 text-sm leading-6 text-red-600">
+                    {testResult.error || '翻译失败'}
+                  </div>
+                )}
               </div>
             </div>
           </section>
 
-          <div className="space-y-6">
-            <section className="rounded-2xl border border-gray-100 bg-white shadow-sm">
-              <div className="border-b border-gray-100 px-6 py-5">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500 text-white shadow-lg shadow-emerald-500/20">
-                    <Languages size={20} />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900">测试翻译</h2>
-                    <p className="mt-1 text-sm text-gray-500">会先保存当前表单，再调用 `translate_smart`，方便验证真实链路和来源。</p>
-                  </div>
+          <section className="rounded-2xl border border-gray-100 bg-white shadow-sm">
+            <div className="border-b border-gray-100 px-6 py-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gray-100 text-gray-700">
+                  <Database size={20} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">缓存统计</h2>
+                  <p className="mt-1 text-sm text-gray-500">已缓存文本会优先从 SQLite 直接返回，适合重复翻译 MOD 名称和描述。</p>
                 </div>
               </div>
+            </div>
 
-              <div className="space-y-4 px-6 py-6">
-                <textarea
-                  value={testText}
-                  onChange={(event) => setTestText(event.target.value)}
-                  rows={4}
-                  placeholder="输入一段英文进行测试"
-                  className="w-full resize-y rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition-colors placeholder:text-gray-300 focus:border-gray-900 focus:bg-white focus:ring-2 focus:ring-gray-900/5"
-                />
+            <div className="space-y-4 px-6 py-6">
+              <div className="rounded-2xl bg-gray-900 px-5 py-5 text-white">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Cached Entries</p>
+                <p className="mt-3 text-4xl font-bold">
+                  {cacheLoading ? '...' : cacheCount}
+                </p>
+                {cacheError && <p className="mt-3 text-sm text-red-300">{cacheError}</p>}
+              </div>
 
+              <div className="flex gap-3">
                 <button
-                  onClick={handleTestTranslate}
-                  disabled={testing || saving}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={refreshCacheCount}
+                  disabled={cacheLoading}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <Languages size={16} />
-                  {testing ? '测试中...' : '测试'}
+                  <RefreshCw size={16} className={cacheLoading ? 'animate-spin' : ''} />
+                  刷新统计
                 </button>
-
-                <div className="rounded-2xl border border-gray-100 bg-gray-50/80 p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">结果</p>
-                    {testResult?.provider && (
-                      <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${providerMeta.className}`}>
-                        {providerMeta.label}
-                      </span>
-                    )}
-                  </div>
-
-                  {!testResult && (
-                    <p className="text-sm leading-6 text-gray-400">还没有测试结果。建议先用 “Hello World” 验证缓存与引擎切换。</p>
-                  )}
-
-                  {testResult?.success && (
-                    <div className="space-y-3">
-                      <div className="rounded-xl border border-emerald-100 bg-white px-4 py-3">
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-500">Translated</p>
-                        <p className="mt-2 text-sm leading-7 text-gray-800">{testResult.translated}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {testResult && !testResult.success && (
-                    <div className="rounded-xl border border-red-100 bg-white px-4 py-3 text-sm leading-6 text-red-600">
-                      {testResult.error || '翻译失败'}
-                    </div>
-                  )}
-                </div>
+                <button
+                  onClick={handleClearCache}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-600 transition-colors hover:bg-red-100"
+                >
+                  <Trash2 size={16} />
+                  清除缓存
+                </button>
               </div>
-            </section>
-
-            <section className="rounded-2xl border border-gray-100 bg-white shadow-sm">
-              <div className="border-b border-gray-100 px-6 py-5">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gray-100 text-gray-700">
-                    <Database size={20} />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900">缓存统计</h2>
-                    <p className="mt-1 text-sm text-gray-500">已缓存文本会优先从 SQLite 直接返回，适合重复翻译 MOD 名称和描述。</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-4 px-6 py-6">
-                <div className="rounded-2xl bg-gray-900 px-5 py-5 text-white">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Cached Entries</p>
-                  <p className="mt-3 text-4xl font-bold">
-                    {cacheLoading ? '...' : cacheCount}
-                  </p>
-                  {cacheError && <p className="mt-3 text-sm text-red-300">{cacheError}</p>}
-                </div>
-
-                <div className="flex gap-3">
-                  <button
-                    onClick={refreshCacheCount}
-                    disabled={cacheLoading}
-                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <RefreshCw size={16} className={cacheLoading ? 'animate-spin' : ''} />
-                    刷新统计
-                  </button>
-                  <button
-                    onClick={handleClearCache}
-                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-600 transition-colors hover:bg-red-100"
-                  >
-                    <Trash2 size={16} />
-                    清除缓存
-                  </button>
-                </div>
-              </div>
-            </section>
-          </div>
+            </div>
+          </section>
         </div>
       </div>
-    </div>
+    </>
+  );
+
+  return (
+    embedded ? (
+      <div>{content}</div>
+    ) : (
+      <div className="flex-1 overflow-y-auto bg-gray-50">
+        <div className="mx-auto max-w-6xl px-6 py-8">
+          {header}
+          {content}
+        </div>
+      </div>
+    )
   );
 }
