@@ -447,7 +447,7 @@ pub fn mods_uninstall(
     }
 }
 
-fn smart_extract_zip(zip_path: &str, mods_dir: &Path) -> Result<(), String> {
+pub(crate) fn smart_extract_zip(zip_path: &str, mods_dir: &Path) -> Result<(), String> {
     let ext = Path::new(zip_path)
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())

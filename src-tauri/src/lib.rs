@@ -4,6 +4,7 @@ mod game;
 mod logs;
 mod mods;
 mod nexus_api;
+mod nexus_download;
 mod profiles;
 mod saves;
 mod translate;
@@ -106,6 +107,7 @@ pub fn run() {
             nexus_api::nexus_get_latest_updated,
             nexus_api::nexus_get_mod,
             nexus_api::nexus_get_mod_files,
+            nexus_download::nexus_open_download_page,
             // Saves
             saves::saves_scan,
             saves::saves_export,

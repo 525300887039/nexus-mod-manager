@@ -112,6 +112,7 @@ window.api = {
   nexusGetLatestUpdated: () => invoke('nexus_get_latest_updated'),
   nexusGetMod: (modId) => invoke('nexus_get_mod', { modId }),
   nexusGetModFiles: (modId) => invoke('nexus_get_mod_files', { modId }),
+  openNexusDownload: (modId, fileId) => invoke('nexus_open_download_page', { modId, fileId }),
   saveNexusKey: (key) => invoke('config_save_nexus_key', { key }),
   getNexusKey: () => invoke('config_get_nexus_key'),
 
