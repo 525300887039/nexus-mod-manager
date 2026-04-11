@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -154,7 +153,10 @@ fn parse_progress(path: &Path) -> Option<ProgressSummary> {
                         losses,
                         max_ascension: c.get("max_ascension").and_then(|v| v.as_u64()).unwrap_or(0),
                         playtime: c.get("playtime").and_then(|v| v.as_u64()).unwrap_or(0),
-                        best_streak: c.get("best_win_streak").and_then(|v| v.as_u64()).unwrap_or(0),
+                        best_streak: c
+                            .get("best_win_streak")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
                     })
                 })
                 .collect()
@@ -162,15 +164,43 @@ fn parse_progress(path: &Path) -> Option<ProgressSummary> {
         .unwrap_or_default();
 
     Some(ProgressSummary {
-        total_playtime: data.get("total_playtime").and_then(|v| v.as_u64()).unwrap_or(0),
-        floors_climbed: data.get("floors_climbed").and_then(|v| v.as_u64()).unwrap_or(0),
-        current_score: data.get("current_score").and_then(|v| v.as_u64()).unwrap_or(0),
-        total_unlocks: data.get("total_unlocks").and_then(|v| v.as_u64()).unwrap_or(0),
-        discovered_cards: data.get("discovered_cards").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
-        discovered_relics: data.get("discovered_relics").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
-        epochs: data.get("epochs").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0),
+        total_playtime: data
+            .get("total_playtime")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        floors_climbed: data
+            .get("floors_climbed")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        current_score: data
+            .get("current_score")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        total_unlocks: data
+            .get("total_unlocks")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        discovered_cards: data
+            .get("discovered_cards")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0),
+        discovered_relics: data
+            .get("discovered_relics")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0),
+        epochs: data
+            .get("epochs")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0),
         characters,
-        unique_id: data.get("unique_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        unique_id: data
+            .get("unique_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -218,7 +248,7 @@ fn scan_save_slot(user_dir: &Path, slot: &str, modded: bool) -> Option<SaveSlot>
     let has_progress = progress_path.exists();
     let has_prefs = saves_dir.join("prefs.save").exists();
 
-    let (mut total_size, mut last_modified) = if saves_dir.exists() {
+    let (mut total_size, last_modified) = if saves_dir.exists() {
         walk_size_and_mtime(&saves_dir)
     } else {
         (0, 0)
@@ -273,9 +303,9 @@ fn timestamp_string() -> String {
     let s = secs % 60;
     format!(
         "{}-{:02}-{:02}T{:02}-{:02}-{:02}",
-        1970 + secs / 31557600, // approximate year
+        1970 + secs / 31557600,            // approximate year
         ((secs % 31557600) / 2629800) + 1, // approximate month
-        ((secs % 2629800) / 86400) + 1, // approximate day
+        ((secs % 2629800) / 86400) + 1,    // approximate day
         hours,
         mins,
         s
@@ -286,7 +316,12 @@ fn timestamp_string() -> String {
 pub fn saves_scan() -> SavesResult {
     let user_dir = match get_steam_user_dir() {
         Some(d) => d,
-        None => return SavesResult { slots: vec![], backups: vec![] },
+        None => {
+            return SavesResult {
+                slots: vec![],
+                backups: vec![],
+            }
+        }
     };
 
     let mut slots = Vec::new();
@@ -353,7 +388,9 @@ fn add_dir_to_zip(
                 let _ = zip_writer.add_directory(&format!("{}/", rel), options);
                 add_dir_to_zip(zip_writer, base, &path, options)?;
             } else {
-                zip_writer.start_file(&rel, options).map_err(|e| e.to_string())?;
+                zip_writer
+                    .start_file(&rel, options)
+                    .map_err(|e| e.to_string())?;
                 let mut f = fs::File::open(&path).map_err(|e| e.to_string())?;
                 let mut buf = Vec::new();
                 f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
@@ -377,7 +414,12 @@ pub async fn saves_export(
 ) -> Result<SimpleResult, String> {
     let user_dir = match get_steam_user_dir() {
         Some(d) => d,
-        None => return Ok(SimpleResult { success: false, error: Some("未找到游戏存档目录".into()) }),
+        None => {
+            return Ok(SimpleResult {
+                success: false,
+                error: Some("未找到游戏存档目录".into()),
+            })
+        }
     };
 
     let prefix = if opts.modded {
@@ -386,7 +428,10 @@ pub async fn saves_export(
         user_dir.join(&opts.slot)
     };
     if !prefix.exists() {
-        return Ok(SimpleResult { success: false, error: Some("该存档槽位为空".into()) });
+        return Ok(SimpleResult {
+            success: false,
+            error: Some("该存档槽位为空".into()),
+        });
     }
 
     let tag = if opts.modded {
@@ -407,7 +452,12 @@ pub async fn saves_export(
 
     let dest = match save_path {
         Some(p) => p.to_string(),
-        None => return Ok(SimpleResult { success: false, error: None }),
+        None => {
+            return Ok(SimpleResult {
+                success: false,
+                error: None,
+            })
+        }
     };
 
     let file = fs::File::create(&dest).map_err(|e| e.to_string())?;
@@ -428,10 +478,18 @@ pub async fn saves_export(
         .map_err(|e| e.to_string())?;
 
     // Add save folder with slot name as prefix
-    add_dir_to_zip(&mut zip_writer, prefix.parent().unwrap_or(&prefix), &prefix, options)?;
+    add_dir_to_zip(
+        &mut zip_writer,
+        prefix.parent().unwrap_or(&prefix),
+        &prefix,
+        options,
+    )?;
     zip_writer.finish().map_err(|e| e.to_string())?;
 
-    Ok(SimpleResult { success: true, error: None })
+    Ok(SimpleResult {
+        success: true,
+        error: None,
+    })
 }
 
 #[tauri::command]
@@ -441,7 +499,12 @@ pub async fn saves_import(
 ) -> Result<SimpleResult, String> {
     let user_dir = match get_steam_user_dir() {
         Some(d) => d,
-        None => return Ok(SimpleResult { success: false, error: Some("未找到游戏存档目录".into()) }),
+        None => {
+            return Ok(SimpleResult {
+                success: false,
+                error: Some("未找到游戏存档目录".into()),
+            })
+        }
     };
 
     let dialog = app.dialog();
@@ -453,7 +516,12 @@ pub async fn saves_import(
 
     let zip_path = match file {
         Some(p) => p.to_string(),
-        None => return Ok(SimpleResult { success: false, error: None }),
+        None => {
+            return Ok(SimpleResult {
+                success: false,
+                error: None,
+            })
+        }
     };
 
     let target_dir = if opts.modded {
@@ -536,7 +604,10 @@ pub async fn saves_import(
         fs::write(&dest, &buf).map_err(|e| e.to_string())?;
     }
 
-    Ok(SimpleResult { success: true, error: None })
+    Ok(SimpleResult {
+        success: true,
+        error: None,
+    })
 }
 
 #[tauri::command]
@@ -550,5 +621,8 @@ pub fn saves_delete_backup(backup_path: String) -> SimpleResult {
             };
         }
     }
-    SimpleResult { success: true, error: None }
+    SimpleResult {
+        success: true,
+        error: None,
+    }
 }
