@@ -8,6 +8,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SQLITE_BATCH_SIZE: usize = 900;
 
+#[derive(Clone, Debug)]
+pub(crate) struct SavedTranslationRow {
+    pub name_translated: Option<String>,
+    pub desc_translated: Option<String>,
+    pub source_name: Option<String>,
+    pub source_desc: Option<String>,
+}
+
 fn app_data_dir() -> Result<PathBuf, String> {
     let base = dirs::data_dir().ok_or_else(|| "无法解析应用数据目录".to_string())?;
     let dir = base.join("STS2ModManager");
@@ -40,6 +48,13 @@ fn now_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+fn normalize_optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(String::from)
 }
 
 fn upsert_translation_row(
@@ -86,6 +101,146 @@ fn build_mod_source_lookup(game_path: &str) -> HashMap<String, (Option<String>, 
                 .map(|id| (id, (mod_info.name, mod_info.description)))
         })
         .collect()
+}
+
+pub(crate) fn saved_translation_upsert_db(
+    db: &Connection,
+    mod_id: &str,
+    name_translated: Option<&str>,
+    desc_translated: Option<&str>,
+    source_name: Option<&str>,
+    source_desc: Option<&str>,
+) -> Result<(), String> {
+    let mod_id = mod_id.trim();
+    if mod_id.is_empty() {
+        return Err("mod_id 不能为空".to_string());
+    }
+
+    let name_translated = normalize_optional_text(name_translated);
+    let desc_translated = normalize_optional_text(desc_translated);
+    let source_name = normalize_optional_text(source_name);
+    let source_desc = normalize_optional_text(source_desc);
+
+    if name_translated.is_none() && desc_translated.is_none() {
+        return Ok(());
+    }
+
+    let now = now_millis();
+    db.execute(
+        "INSERT INTO saved_translations (
+           mod_id,
+           name_translated,
+           desc_translated,
+           source_name,
+           source_desc,
+           updated_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(mod_id) DO UPDATE SET
+           name_translated = COALESCE(excluded.name_translated, saved_translations.name_translated),
+           desc_translated = COALESCE(excluded.desc_translated, saved_translations.desc_translated),
+           source_name = COALESCE(excluded.source_name, saved_translations.source_name),
+           source_desc = COALESCE(excluded.source_desc, saved_translations.source_desc),
+           updated_at = excluded.updated_at",
+        params![
+            mod_id,
+            name_translated.as_deref(),
+            desc_translated.as_deref(),
+            source_name.as_deref(),
+            source_desc.as_deref(),
+            now
+        ],
+    )
+    .map_err(|e| format!("写入已保存翻译失败: {}", e))?;
+
+    Ok(())
+}
+
+pub(crate) fn saved_translations_load_db(
+    db: &Connection,
+) -> Result<HashMap<String, SavedTranslationRow>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT mod_id, name_translated, desc_translated, source_name, source_desc
+             FROM saved_translations",
+        )
+        .map_err(|e| format!("准备已保存翻译查询失败: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                SavedTranslationRow {
+                    name_translated: row.get::<_, Option<String>>(1)?,
+                    desc_translated: row.get::<_, Option<String>>(2)?,
+                    source_name: row.get::<_, Option<String>>(3)?,
+                    source_desc: row.get::<_, Option<String>>(4)?,
+                },
+            ))
+        })
+        .map_err(|e| format!("读取已保存翻译失败: {}", e))?;
+
+    let mut result = HashMap::new();
+    for row in rows {
+        let (mod_id, entry) = row.map_err(|e| format!("解析已保存翻译失败: {}", e))?;
+        result.insert(mod_id, entry);
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn sync_saved_translations_with_game_path_db(
+    db: &mut Connection,
+    game_path: &str,
+) -> Result<(), String> {
+    let saved_rows = saved_translations_load_db(db)?;
+    if saved_rows.is_empty() {
+        return Ok(());
+    }
+
+    let mod_lookup = build_mod_source_lookup(game_path);
+    if mod_lookup.is_empty() {
+        return Ok(());
+    }
+
+    let tx = db
+        .transaction()
+        .map_err(|e| format!("开启已保存翻译同步事务失败: {}", e))?;
+
+    for (mod_id, (source_name, source_desc)) in mod_lookup {
+        let Some(saved_row) = saved_rows.get(&mod_id) else {
+            continue;
+        };
+        let source_name_changed = saved_row.source_name != source_name;
+        let source_desc_changed = saved_row.source_desc != source_desc;
+
+        if let (Some(source_text), Some(translated)) =
+            (source_name.as_deref(), saved_row.name_translated.as_deref())
+        {
+            upsert_translation_row(&tx, source_text, translated, "compat")?;
+        }
+
+        if let (Some(source_text), Some(translated)) =
+            (source_desc.as_deref(), saved_row.desc_translated.as_deref())
+        {
+            upsert_translation_row(&tx, source_text, translated, "compat")?;
+        }
+
+        if source_name_changed || source_desc_changed {
+            saved_translation_upsert_db(
+                &tx,
+                &mod_id,
+                saved_row.name_translated.as_deref(),
+                saved_row.desc_translated.as_deref(),
+                source_name.as_deref(),
+                source_desc.as_deref(),
+            )?;
+        }
+    }
+
+    tx.commit()
+        .map_err(|e| format!("提交已保存翻译同步事务失败: {}", e))?;
+
+    Ok(())
 }
 
 pub(crate) fn translation_cache_get_db(
@@ -195,6 +350,14 @@ pub fn init_db(_app_handle: &tauri::AppHandle) -> Result<Connection, String> {
            created_at INTEGER NOT NULL,
            updated_at INTEGER NOT NULL
          );
+         CREATE TABLE IF NOT EXISTS saved_translations (
+           mod_id TEXT PRIMARY KEY,
+           name_translated TEXT,
+           desc_translated TEXT,
+           source_name TEXT,
+           source_desc TEXT,
+           updated_at INTEGER NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS nexus_mod_cache (
            mod_id INTEGER PRIMARY KEY,
            data_json TEXT NOT NULL,
@@ -223,15 +386,9 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
         return Err("旧 translations.json 根节点必须是对象".to_string());
     };
 
-    let requires_mod_lookup = entries.values().any(|value| value.is_object());
-    let mod_lookup = if requires_mod_lookup {
-        let Some(game_path) = config::load_or_detect_game_path() else {
-            return Ok(());
-        };
-        build_mod_source_lookup(&game_path)
-    } else {
-        HashMap::new()
-    };
+    let mod_lookup = config::load_or_detect_game_path()
+        .map(|game_path| build_mod_source_lookup(&game_path))
+        .unwrap_or_default();
 
     let tx = db
         .transaction()
@@ -248,15 +405,23 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
         let Some(legacy_entry) = value.as_object() else {
             continue;
         };
-        let Some((source_name, source_desc)) = mod_lookup.get(key) else {
-            eprintln!(
-                "Skipping unresolved legacy translation entry for mod id {}",
-                key
-            );
-            continue;
-        };
+        let name_translated = legacy_entry.get("name").and_then(|value| value.as_str());
+        let desc_translated = legacy_entry.get("desc").and_then(|value| value.as_str());
+        let (source_name, source_desc) = mod_lookup
+            .get(key)
+            .cloned()
+            .unwrap_or((None, None));
 
-        if let Some(translated_name) = legacy_entry.get("name").and_then(|value| value.as_str()) {
+        saved_translation_upsert_db(
+            &tx,
+            key,
+            name_translated,
+            desc_translated,
+            source_name.as_deref(),
+            source_desc.as_deref(),
+        )?;
+
+        if let Some(translated_name) = name_translated {
             if let Some(source_text) = source_name.as_deref() {
                 if !source_text.trim().is_empty() && !translated_name.trim().is_empty() {
                     upsert_translation_row(&tx, source_text, translated_name, "legacy")?;
@@ -264,7 +429,7 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
             }
         }
 
-        if let Some(translated_desc) = legacy_entry.get("desc").and_then(|value| value.as_str()) {
+        if let Some(translated_desc) = desc_translated {
             if let Some(source_text) = source_desc.as_deref() {
                 if !source_text.trim().is_empty() && !translated_desc.trim().is_empty() {
                     upsert_translation_row(&tx, source_text, translated_desc, "legacy")?;
