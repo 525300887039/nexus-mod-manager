@@ -13,6 +13,10 @@ const REQUIRED_NEXUS_API_METHODS = [
   'saveNexusTranslations',
 ];
 
+let nexusTranslationsSnapshot = null;
+let nexusTranslationsLoadPromise = null;
+let nexusTranslationsWriteQueue = Promise.resolve(null);
+
 export function getNexusTranslationKey(modId) {
   return `${NEXUS_TRANSLATION_PREFIX}${modId}`;
 }
@@ -81,11 +85,26 @@ export async function loadNexusTranslationsMap() {
     return {};
   }
 
+  if (nexusTranslationsSnapshot) {
+    return { ...nexusTranslationsSnapshot };
+  }
+
+  if (nexusTranslationsLoadPromise) {
+    const loaded = await nexusTranslationsLoadPromise;
+    return { ...loaded };
+  }
+
   try {
-    const data = await window.api.loadNexusTranslations();
-    return data && typeof data === 'object' ? data : {};
+    nexusTranslationsLoadPromise = window.api.loadNexusTranslations().then((data) => (
+      data && typeof data === 'object' ? data : {}
+    ));
+    const loaded = await nexusTranslationsLoadPromise;
+    nexusTranslationsSnapshot = loaded;
+    return { ...loaded };
   } catch (_error) {
     return {};
+  } finally {
+    nexusTranslationsLoadPromise = null;
   }
 }
 
@@ -98,7 +117,31 @@ export async function saveNexusTranslationsMap(data) {
   if (result?.success === false) {
     throw new Error(result.error || '保存 Nexus 翻译失败');
   }
+  nexusTranslationsSnapshot = { ...data };
   return result;
+}
+
+async function mergeAndPersistNexusTranslations({ modId, existing = {}, updates }) {
+  const translationKey = getNexusTranslationKey(modId);
+
+  nexusTranslationsWriteQueue = nexusTranslationsWriteQueue.then(async () => {
+    const latestMap = await loadNexusTranslationsMap();
+    const nextMap = {
+      ...latestMap,
+      [translationKey]: {
+        ...(latestMap[translationKey] || existing || {}),
+        ...updates,
+      },
+    };
+    await saveNexusTranslationsMap(nextMap);
+    return nextMap;
+  });
+
+  const savedMap = await nexusTranslationsWriteQueue;
+  return {
+    translationKey,
+    translations: savedMap ? { ...savedMap } : {},
+  };
 }
 
 export async function translateNexusModFields({
@@ -159,18 +202,17 @@ export async function translateNexusModFields({
   }
 
   const translationKey = getNexusTranslationKey(modId);
-  const translationMap = await loadNexusTranslationsMap();
-  translationMap[translationKey] = {
-    ...(translationMap[translationKey] || existing || {}),
-    ...updates,
-  };
-  await saveNexusTranslationsMap(translationMap);
+  const { translations } = await mergeAndPersistNexusTranslations({
+    modId,
+    existing,
+    updates,
+  });
 
   return {
     success: true,
     updates,
     translationKey,
-    translations: translationMap,
+    translations,
     error: errors[0] || null,
   };
 }
