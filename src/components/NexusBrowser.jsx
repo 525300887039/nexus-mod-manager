@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Globe,
@@ -6,18 +6,18 @@ import {
   Loader2,
   RefreshCw,
   Search,
-  Settings2,
+  Settings,
   ShieldCheck,
   Star,
 } from 'lucide-react';
 import NexusModDetail from './NexusModDetail';
-import NexusSettings from './NexusSettings';
 import {
   formatCompactNumber,
   getNexusTranslationKey,
   hasNexusBrowserSupport,
+  isChineseText,
   loadNexusTranslationsMap,
-  translateNexusModFields,
+  saveNexusTranslationsMap,
 } from './nexusShared';
 
 const TAB_CONFIG = {
@@ -34,6 +34,8 @@ const TAB_CONFIG = {
     loader: () => window.api.nexusGetLatestUpdated(),
   },
 };
+
+const TRANSLATE_DELAY_MS = 1000;
 
 function createTabState() {
   return {
@@ -52,8 +54,41 @@ function createAllTabStates() {
   };
 }
 
+function delayWithAbort(ms, abortRef) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const tick = () => {
+      if (abortRef?.current || Date.now() - startedAt >= ms) {
+        resolve();
+        return;
+      }
+      window.setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
+function getBrowserSummary(translationEntry, mod) {
+  return translationEntry?.summary || translationEntry?.desc || mod.summary || '暂无摘要';
+}
+
+function needsNameTranslation(mod, translationEntry, force = false) {
+  if (!mod.name || isChineseText(mod.name)) {
+    return false;
+  }
+  return force || !translationEntry?.name;
+}
+
+function needsSummaryTranslation(mod, translationEntry, force = false) {
+  if (!mod.summary || isChineseText(mod.summary)) {
+    return false;
+  }
+  return force || (!translationEntry?.summary && !translationEntry?.desc);
+}
+
 function NexusModCard({ mod, translationEntry, translating, onClick, onTranslate }) {
   const [imageError, setImageError] = useState(false);
+  const isTranslated = !needsNameTranslation(mod, translationEntry) && !needsSummaryTranslation(mod, translationEntry);
 
   useEffect(() => {
     setImageError(false);
@@ -108,7 +143,7 @@ function NexusModCard({ mod, translationEntry, translating, onClick, onTranslate
               className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300"
             >
               {translating ? <Loader2 size={14} className="animate-spin" /> : <Languages size={14} />}
-              {translating ? '翻译中' : translationEntry?.name ? '重译' : '翻译'}
+              {translating ? '翻译中' : isTranslated ? '重译' : '翻译'}
             </button>
           </div>
           <p className="mt-2 text-sm text-gray-500">作者: {mod.author || mod.uploadedBy || '未知'}</p>
@@ -121,7 +156,7 @@ function NexusModCard({ mod, translationEntry, translating, onClick, onTranslate
               overflow: 'hidden',
             }}
           >
-            {mod.summary || '暂无摘要'}
+            {getBrowserSummary(translationEntry, mod)}
           </p>
         </div>
 
@@ -140,6 +175,7 @@ function NexusModCard({ mod, translationEntry, translating, onClick, onTranslate
 }
 
 export default function NexusBrowser({
+  onNavigate,
   onRefreshMods,
   onShowToast,
   onNexusDownloadStatusChange,
@@ -147,27 +183,64 @@ export default function NexusBrowser({
   const nexusSupported = hasNexusBrowserSupport();
   const [apiKey, setApiKey] = useState('');
   const [initializing, setInitializing] = useState(true);
-  const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState('trending');
   const [tabStates, setTabStates] = useState(createAllTabStates);
   const [search, setSearch] = useState('');
   const [translations, setTranslations] = useState({});
   const [selectedMod, setSelectedMod] = useState(null);
   const [translatingIds, setTranslatingIds] = useState({});
-  const [flash, setFlash] = useState(null);
+  const [translating, setTranslating] = useState(false);
+  const [translateProgress, setTranslateProgress] = useState({ done: 0, total: 0 });
 
+  const translationsRef = useRef({});
+  const saveQueueRef = useRef(Promise.resolve());
+  const translateAbortRef = useRef(false);
   const deferredSearch = useDeferredValue(search);
   const activeState = tabStates[activeTab];
-  const hasApiKey = Boolean(apiKey);
+  const hasApiKey = Boolean(apiKey.trim());
 
   useEffect(() => {
-    if (!flash) {
+    translationsRef.current = translations;
+  }, [translations]);
+
+  useEffect(() => {
+    return () => {
+      translateAbortRef.current = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (translating || translateProgress.total === 0) {
       return undefined;
     }
 
-    const timer = window.setTimeout(() => setFlash(null), 3000);
+    const timer = window.setTimeout(() => {
+      setTranslateProgress({ done: 0, total: 0 });
+    }, 1800);
+
     return () => window.clearTimeout(timer);
-  }, [flash]);
+  }, [translating, translateProgress]);
+
+  const persistTranslations = async (nextTranslations) => {
+    saveQueueRef.current = saveQueueRef.current
+      .catch(() => null)
+      .then(() => saveNexusTranslationsMap(nextTranslations));
+    await saveQueueRef.current;
+  };
+
+  const applyTranslationUpdates = async (translationKey, updates) => {
+    const nextTranslations = {
+      ...translationsRef.current,
+      [translationKey]: {
+        ...(translationsRef.current[translationKey] || {}),
+        ...updates,
+      },
+    };
+    translationsRef.current = nextTranslations;
+    setTranslations(nextTranslations);
+    await persistTranslations(nextTranslations);
+    return nextTranslations[translationKey];
+  };
 
   const fetchTab = async (tab, options = {}) => {
     const { force = false, keyOverride = '' } = options;
@@ -212,9 +285,6 @@ export default function NexusBrowser({
           error: message,
         },
       }));
-      if (message.includes('API Key')) {
-        setShowSettings(true);
-      }
     }
   };
 
@@ -225,7 +295,6 @@ export default function NexusBrowser({
       if (!nexusSupported) {
         if (!cancelled) {
           setInitializing(false);
-          setShowSettings(false);
         }
         return;
       }
@@ -243,7 +312,7 @@ export default function NexusBrowser({
         const normalizedKey = savedKey || '';
         setApiKey(normalizedKey);
         setTranslations(savedTranslations);
-        setShowSettings(!normalizedKey);
+        translationsRef.current = savedTranslations;
 
         if (normalizedKey) {
           await fetchTab('trending', { force: true, keyOverride: normalizedKey });
@@ -267,45 +336,164 @@ export default function NexusBrowser({
     }
 
     return activeState.data.filter((mod) => {
-      const translatedName = translations[getNexusTranslationKey(mod.modId)]?.name || '';
-      return [mod.name, mod.summary, translatedName]
+      const translationEntry = translations[getNexusTranslationKey(mod.modId)] || {};
+      return [
+        mod.name,
+        mod.summary,
+        translationEntry.name,
+        translationEntry.summary,
+        translationEntry.desc,
+      ]
         .filter(Boolean)
         .some((value) => value.toLowerCase().includes(keyword));
     });
   }, [activeState.data, deferredSearch, translations]);
 
-  const handleTranslateCard = async (mod) => {
-    setTranslatingIds((previous) => ({ ...previous, [mod.modId]: true }));
+  const translateListMod = async (mod, { force = false, throttle = false } = {}) => {
+    const translationKey = getNexusTranslationKey(mod.modId);
+    const errors = [];
 
-    try {
-      const result = await translateNexusModFields({
-        modId: mod.modId,
-        name: mod.name,
-        existing: translations[getNexusTranslationKey(mod.modId)],
-        includeDescription: false,
-      });
-
-      if (result.translations) {
-        setTranslations(result.translations);
+    const translateField = async ({ field, text }) => {
+      if (!text) {
+        return;
       }
-      if (result.error) {
-        setFlash({ type: 'error', message: result.error });
+
+      try {
+        const result = await window.api.translateSmart(text);
+        if (result?.success && result.translated) {
+          await applyTranslationUpdates(translationKey, { [field]: result.translated });
+        } else if (result?.error) {
+          errors.push(result.error);
+        }
+
+        if (throttle && result?.provider && result.provider !== 'cache') {
+          await delayWithAbort(TRANSLATE_DELAY_MS, translateAbortRef);
+        }
+      } catch (error) {
+        errors.push(error?.message || String(error));
+      }
+    };
+
+    let translationEntry = translationsRef.current[translationKey] || {};
+
+    if (translateAbortRef.current) {
+      return { aborted: true, errors };
+    }
+
+    if (needsNameTranslation(mod, translationEntry, force)) {
+      await translateField({ field: 'name', text: mod.name });
+      translationEntry = translationsRef.current[translationKey] || translationEntry;
+    }
+
+    if (translateAbortRef.current) {
+      return { aborted: true, errors };
+    }
+
+    if (needsSummaryTranslation(mod, translationEntry, force)) {
+      await translateField({ field: 'summary', text: mod.summary });
+    }
+
+    return { aborted: translateAbortRef.current, errors };
+  };
+
+  const handleTranslateCard = async (mod) => {
+    if (translating) {
+      return;
+    }
+
+    setTranslatingIds((previous) => ({ ...previous, [mod.modId]: true }));
+    try {
+      const result = await translateListMod(mod, { force: true, throttle: false });
+      if (result.errors.length > 0) {
+        onShowToast?.(result.errors[0], 'error');
+      } else {
+        onShowToast?.(`已更新 ${mod.name} 的翻译。`);
       }
     } catch (error) {
-      setFlash({
-        type: 'error',
-        message: error?.message || String(error),
-      });
+      onShowToast?.(error?.message || String(error), 'error');
     } finally {
       setTranslatingIds((previous) => ({ ...previous, [mod.modId]: false }));
     }
   };
 
-  const handleSettingsSaved = async (savedKey) => {
-    setApiKey(savedKey);
-    setTabStates(createAllTabStates());
-    setShowSettings(false);
-    await fetchTab(activeTab, { force: true, keyOverride: savedKey });
+  const handleTranslateAll = async () => {
+    if (translating) {
+      return;
+    }
+
+    const targets = filteredMods.filter((mod) => {
+      const translationEntry = translationsRef.current[getNexusTranslationKey(mod.modId)] || {};
+      return needsNameTranslation(mod, translationEntry) || needsSummaryTranslation(mod, translationEntry);
+    });
+
+    if (targets.length === 0) {
+      onShowToast?.('当前列表没有需要翻译的 Mod。');
+      return;
+    }
+
+    translateAbortRef.current = false;
+    setTranslating(true);
+    setTranslateProgress({ done: 0, total: targets.length });
+
+    let done = 0;
+    let firstError = '';
+    let errorCount = 0;
+
+    for (const mod of targets) {
+      if (translateAbortRef.current) {
+        break;
+      }
+
+      setTranslatingIds((previous) => ({ ...previous, [mod.modId]: true }));
+
+      try {
+        const result = await translateListMod(mod, { force: false, throttle: true });
+        if (result.errors.length > 0) {
+          errorCount += result.errors.length;
+          if (!firstError) {
+            firstError = result.errors[0];
+          }
+        }
+        if (result.aborted && translateAbortRef.current) {
+          break;
+        }
+      } catch (error) {
+        errorCount += 1;
+        if (!firstError) {
+          firstError = error?.message || String(error);
+        }
+      } finally {
+        setTranslatingIds((previous) => ({ ...previous, [mod.modId]: false }));
+      }
+
+      if (translateAbortRef.current) {
+        break;
+      }
+
+      done += 1;
+      setTranslateProgress({ done, total: targets.length });
+    }
+
+    setTranslating(false);
+
+    if (translateAbortRef.current) {
+      onShowToast?.(`已取消批量翻译，已完成 ${done}/${targets.length} 个 Mod。`, 'error');
+      return;
+    }
+
+    if (errorCount > 0) {
+      onShowToast?.(
+        firstError || `批量翻译完成，但有 ${errorCount} 个字段翻译失败。`,
+        'error',
+      );
+      return;
+    }
+
+    onShowToast?.(`批量翻译完成，已处理 ${done} 个 Mod。`);
+  };
+
+  const handleCancelTranslate = () => {
+    translateAbortRef.current = true;
   };
 
   const handleTabChange = async (tab) => {
@@ -317,6 +505,10 @@ export default function NexusBrowser({
       await fetchTab(tab);
     }
   };
+
+  const translatePercent = translateProgress.total > 0
+    ? Math.round((translateProgress.done / translateProgress.total) * 100)
+    : 0;
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -343,21 +535,15 @@ export default function NexusBrowser({
                 )}
                 <button
                   type="button"
-                  onClick={() => setShowSettings((current) => !current)}
+                  onClick={() => onNavigate?.('settings', { tab: 'nexus' })}
                   className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
                 >
-                  <Settings2 size={16} />
-                  {showSettings ? '收起 API Key' : 'API Key 设置'}
+                  <Settings size={16} />
+                  Nexus 设置
                 </button>
               </div>
             )}
           </div>
-
-          {showSettings && (
-            <div className="mb-6">
-              <NexusSettings initialKey={apiKey} onSaved={handleSettingsSaved} />
-            </div>
-          )}
 
           {!nexusSupported ? (
             <div className="rounded-3xl border border-amber-100 bg-amber-50 px-8 py-12 text-center shadow-sm">
@@ -388,11 +574,11 @@ export default function NexusBrowser({
               <div className="mt-6 flex justify-center">
                 <button
                   type="button"
-                  onClick={() => setShowSettings(true)}
+                  onClick={() => onNavigate?.('settings', { tab: 'nexus' })}
                   className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
                 >
                   <ShieldCheck size={16} />
-                  配置 API Key
+                  前往设置
                 </button>
               </div>
             </div>
@@ -426,7 +612,45 @@ export default function NexusBrowser({
                     className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-900 outline-none transition-colors focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5"
                   />
                 </div>
+
+                <button
+                  type="button"
+                  onClick={handleTranslateAll}
+                  disabled={translating || filteredMods.length === 0}
+                  className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {translating ? <Loader2 size={16} className="animate-spin" /> : <Languages size={16} />}
+                  {translating ? '翻译中...' : '全部翻译'}
+                </button>
               </div>
+
+              {(translating || translateProgress.total > 0) && (
+                <div className="mb-4 rounded-2xl border border-gray-100 bg-white px-4 py-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">批量翻译进度</p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        已完成 {translateProgress.done}/{translateProgress.total} · {translatePercent}%
+                      </p>
+                    </div>
+                    {translating && (
+                      <button
+                        type="button"
+                        onClick={handleCancelTranslate}
+                        className="inline-flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-100"
+                      >
+                        取消
+                      </button>
+                    )}
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+                    <div
+                      className="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+                      style={{ width: `${translatePercent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
 
               {activeState.error && (
                 <div className="mb-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -455,7 +679,7 @@ export default function NexusBrowser({
                       key={mod.modId}
                       mod={mod}
                       translationEntry={translations[getNexusTranslationKey(mod.modId)]}
-                      translating={Boolean(translatingIds[mod.modId])}
+                      translating={Boolean(translatingIds[mod.modId]) || translating}
                       onClick={() => setSelectedMod(mod)}
                       onTranslate={() => handleTranslateCard(mod)}
                     />
@@ -472,23 +696,14 @@ export default function NexusBrowser({
           mod={selectedMod}
           translationEntry={translations[getNexusTranslationKey(selectedMod.modId)]}
           onClose={() => setSelectedMod(null)}
-          onTranslationsChange={setTranslations}
+          onTranslationsChange={(nextTranslations) => {
+            setTranslations(nextTranslations);
+            translationsRef.current = nextTranslations;
+          }}
           onRefreshMods={onRefreshMods}
           onShowToast={onShowToast}
           onNexusDownloadStatusChange={onNexusDownloadStatusChange}
         />
-      )}
-
-      {flash && (
-        <div
-          className={`fixed bottom-6 right-6 rounded-xl border px-4 py-3 text-sm font-medium shadow-lg ${
-            flash.type === 'error'
-              ? 'border-red-200 bg-red-50 text-red-700'
-              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-          }`}
-        >
-          {flash.message}
-        </div>
       )}
     </div>
   );

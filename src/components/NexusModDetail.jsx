@@ -107,7 +107,7 @@ export default function NexusModDetail({
 
   const currentMod = { ...mod, ...detail };
   const translatedName = translationEntry?.name || '';
-  const translatedDescription = translationEntry?.desc || '';
+  const translatedDescription = translationEntry?.desc || (!currentMod.description ? translationEntry?.summary || '' : '');
   const fileGroups = useMemo(() => groupFilesByCategory(files), [files]);
   const preferredFile = useMemo(
     () => files.find((file) => (file.categoryName || '').toUpperCase() === 'MAIN') || files[0] || null,
