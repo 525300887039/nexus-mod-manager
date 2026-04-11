@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ModCard from './components/ModCard';
 import ModListItem from './components/ModListItem';
@@ -14,6 +14,9 @@ import {
   ToggleLeft, ToggleRight, Trash2, Layers, Save, ChevronDown, Package, LayoutGrid, List,
   ArrowUpDown, CheckCircle2, Circle, Rocket,
 } from 'lucide-react';
+
+const VALID_PAGES = new Set(['mods', 'nexus', 'saves', 'logs', 'settings']);
+const VALID_SETTINGS_TABS = new Set(['nexus', 'translate', 'about']);
 
 export default function App() {
   const [page, setPage] = useState('mods');
@@ -39,22 +42,78 @@ export default function App() {
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [translations, setTranslations] = useState({});
   const [downloadStatus, setDownloadStatus] = useState(null);
+  const toastTimerRef = useRef(null);
   const clearDownloadStatus = useCallback(() => setDownloadStatus(null), []);
 
   useEffect(() => {
-    window.api.getGameState().then(setGameState);
-    window.api.getGameVersion().then(v => { if (v.version) setGameVersion(v.version); });
-    window.api.onGameStateChanged((state) => setGameState(state));
-    window.api.onGameExited(async (info) => {
-      const v = await window.api.getGameVersion();
-      if (v.version) setGameVersion(v.version);
-      const report = await window.api.analyzeCrash();
-      if (report && (report.issues.length > 0 || report.errorCount > 0)) {
-        setCrashReport(report);
+    let cancelled = false;
+
+    const handleGameExited = async () => {
+      try {
+        const [versionInfo, report] = await Promise.all([
+          window.api.getGameVersion(),
+          window.api.analyzeCrash(),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        if (versionInfo?.version) {
+          setGameVersion(versionInfo.version);
+        }
+        if (report && (report.issues.length > 0 || report.errorCount > 0)) {
+          setCrashReport(report);
+        }
+      } catch (_error) {
+        // Ignore background polling and crash-analysis errors here.
+      }
+    };
+
+    const unsubscribeGameState = window.api.onGameStateChanged((state) => {
+      if (!cancelled) {
+        setGameState(state);
       }
     });
-    window.api.loadProfiles().then(setProfiles);
-    if (window.api.loadTranslations) window.api.loadTranslations().then(setTranslations);
+    const unsubscribeGameExited = window.api.onGameExited(handleGameExited);
+
+    (async () => {
+      try {
+        const [state, versionInfo, loadedProfiles, loadedTranslations] = await Promise.all([
+          window.api.getGameState(),
+          window.api.getGameVersion(),
+          window.api.loadProfiles(),
+          window.api.loadTranslations ? window.api.loadTranslations() : Promise.resolve(null),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setGameState(state);
+        if (versionInfo?.version) {
+          setGameVersion(versionInfo.version);
+        }
+        setProfiles(loadedProfiles || {});
+        if (loadedTranslations) {
+          setTranslations(loadedTranslations);
+        }
+      } catch (_error) {
+        // App bootstrap should remain resilient if optional state fails to load.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribeGameState?.();
+      unsubscribeGameExited?.();
+    };
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
   }, []);
 
   const handleLaunchGame = async () => {
@@ -64,8 +123,14 @@ export default function App() {
   };
 
   const showToast = useCallback((msg, type = 'success') => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 3000);
   }, []);
 
   const showConfirmDialog = useCallback(({ title, message, danger = false, onConfirm }) => {
@@ -83,10 +148,11 @@ export default function App() {
   }, []);
 
   const handleNavigate = useCallback((nextPage, options = {}) => {
-    if (nextPage === 'settings' && options.tab) {
-      setSettingsTab(options.tab);
+    const targetPage = VALID_PAGES.has(nextPage) ? nextPage : 'mods';
+    if (targetPage === 'settings' && options.tab) {
+      setSettingsTab(VALID_SETTINGS_TABS.has(options.tab) ? options.tab : 'nexus');
     }
-    setPage(nextPage);
+    setPage(targetPage);
   }, []);
 
   const syncMods = useCallback((list) => {
@@ -99,21 +165,46 @@ export default function App() {
 
   const refreshMods = useCallback(async () => {
     setLoading(true);
-    const list = await window.api.scanMods();
-    syncMods(list);
-    setLoading(false);
-  }, [syncMods]);
+    try {
+      const list = await window.api.scanMods();
+      syncMods(list);
+      return list;
+    } catch (error) {
+      showToast(error?.message || String(error), 'error');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, [showToast, syncMods]);
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
-      const info = await window.api.init();
-      setGamePath(info.gamePath);
-      if (info.gamePath) {
-        const list = await window.api.scanMods();
-        syncMods(list);
+      try {
+        const info = await window.api.init();
+        if (cancelled) {
+          return;
+        }
+
+        setGamePath(info?.gamePath || null);
+        if (info?.gamePath) {
+          const list = await window.api.scanMods();
+          if (!cancelled) {
+            syncMods(list);
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          showToast(error?.message || String(error), 'error');
+        }
       }
     })();
-  }, [syncMods]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showToast, syncMods]);
 
   useEffect(() => {
     const tauriEvent = window.__TAURI__?.event;

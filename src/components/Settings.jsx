@@ -51,6 +51,8 @@ export default function Settings({
   onShowToast,
   onConfirm,
 }) {
+  const resolvedActiveTab = TABS.some((tab) => tab.id === activeTab) ? activeTab : 'nexus';
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="px-8 pt-6 pb-4">
@@ -67,7 +69,7 @@ export default function Settings({
           <div className="flex rounded-xl bg-gray-100 p-1">
             {TABS.map((tab) => {
               const TabIcon = tab.icon;
-              const selected = activeTab === tab.id;
+              const selected = resolvedActiveTab === tab.id;
               return (
                 <button
                   key={tab.id}
@@ -87,11 +89,11 @@ export default function Settings({
           </div>
         </div>
 
-        {activeTab === 'nexus' && (
+        {resolvedActiveTab === 'nexus' && (
           <NexusSettings onShowToast={onShowToast} />
         )}
 
-        {activeTab === 'translate' && (
+        {resolvedActiveTab === 'translate' && (
           <TranslateSettings
             embedded
             onShowToast={onShowToast}
@@ -99,7 +101,7 @@ export default function Settings({
           />
         )}
 
-        {activeTab === 'about' && (
+        {resolvedActiveTab === 'about' && (
           <div className="grid gap-4 xl:grid-cols-2">
             <div className="rounded-3xl border border-gray-100 bg-white p-6 shadow-sm xl:col-span-2">
               <div className="flex items-start gap-4">
