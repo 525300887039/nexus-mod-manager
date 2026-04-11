@@ -10,7 +10,7 @@
     "build": "npx tailwindcss -i ./src/index.css -o ./src/output.css && webpack --mode production",
     "build:tauri-fe": "npx tailwindcss -i ./src/index.css -o ./src/output.css && webpack --config webpack.tauri.config.js --mode production",
     "tauri": "cargo tauri",
-    "tauri:dev": "npm run build:tauri-fe && cargo tauri dev",
+    "tauri:dev": "npm run build:tauri-fe && cargo tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "npm run build:tauri-fe && cargo tauri build",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
