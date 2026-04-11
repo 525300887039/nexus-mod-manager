@@ -11,52 +11,26 @@ fn resolve_translation_game_path(state: &tauri::State<'_, AppState>) -> Option<S
 }
 
 fn collect_translation_cache_map(state: &tauri::State<'_, AppState>) -> Result<Value, String> {
-    let Some(game_path) = resolve_translation_game_path(state) else {
-        return Ok(serde_json::json!({}));
-    };
-
-    let installed_mods = mods::scan_mods_internal(&game_path);
-    if installed_mods.is_empty() {
-        return Ok(serde_json::json!({}));
+    let game_path = resolve_translation_game_path(state);
+    let mut db = state
+        .db
+        .lock()
+        .map_err(|e| format!("数据库锁已损坏: {}", e))?;
+    if let Some(ref game_path) = game_path {
+        db::sync_saved_translations_with_game_path_db(&mut db, game_path)?;
     }
-
-    let mut source_texts = Vec::new();
-    for mod_info in &installed_mods {
-        if let Some(name) = mod_info.name.as_ref() {
-            source_texts.push(name.clone());
-        }
-        if let Some(description) = mod_info.description.as_ref() {
-            source_texts.push(description.clone());
-        }
-    }
-
-    let cached_translations = {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| format!("数据库锁已损坏: {}", e))?;
-        db::translation_cache_batch_get_db(&db, source_texts)?
-    };
-
+    let saved_translations = db::saved_translations_load_db(&db)?;
     let mut result = Map::new();
 
-    for mod_info in installed_mods {
-        let Some(mod_id) = mod_info.id else {
-            continue;
-        };
-
+    for (mod_id, saved_row) in saved_translations {
         let mut entry = Map::new();
 
-        if let Some(name) = mod_info.name.as_ref() {
-            if let Some(translated) = cached_translations.get(name) {
-                entry.insert("name".to_string(), Value::String(translated.clone()));
-            }
+        if let Some(translated) = saved_row.name_translated {
+            entry.insert("name".to_string(), Value::String(translated));
         }
 
-        if let Some(description) = mod_info.description.as_ref() {
-            if let Some(translated) = cached_translations.get(description) {
-                entry.insert("desc".to_string(), Value::String(translated.clone()));
-            }
+        if let Some(translated) = saved_row.desc_translated {
+            entry.insert("desc".to_string(), Value::String(translated));
         }
 
         if !entry.is_empty() {
@@ -71,21 +45,23 @@ fn persist_translation_cache_map(
     state: &tauri::State<'_, AppState>,
     data: &Value,
 ) -> Result<(), String> {
-    let Some(game_path) = resolve_translation_game_path(state) else {
-        return Ok(());
-    };
-
     let Some(entries) = data.as_object() else {
         return Err("translations_save 需要对象格式数据".to_string());
     };
 
-    let mod_lookup = mods::scan_mods_internal(&game_path)
-        .into_iter()
-        .filter_map(|mod_info| {
-            let id = mod_info.id.clone()?;
-            Some((id, mod_info))
+    let game_path = resolve_translation_game_path(state);
+    let mod_lookup = game_path
+        .as_deref()
+        .map(|game_path| {
+            mods::scan_mods_internal(game_path)
+                .into_iter()
+                .filter_map(|mod_info| {
+                    let id = mod_info.id.clone()?;
+                    Some((id, mod_info))
+                })
+                .collect::<std::collections::HashMap<_, _>>()
         })
-        .collect::<std::collections::HashMap<_, _>>();
+        .unwrap_or_default();
 
     let db = state
         .db
@@ -93,23 +69,31 @@ fn persist_translation_cache_map(
         .map_err(|e| format!("数据库锁已损坏: {}", e))?;
 
     for (mod_id, value) in entries {
-        let Some(mod_info) = mod_lookup.get(mod_id) else {
-            continue;
-        };
         let Some(entry) = value.as_object() else {
             continue;
         };
 
-        if let Some(translated_name) = entry.get("name").and_then(|value| value.as_str()) {
-            if let Some(source_text) = mod_info.name.as_deref() {
-                db::translation_cache_set_db(&db, source_text, translated_name, "compat")?;
-            }
-        }
+        let translated_name = entry.get("name").and_then(|value| value.as_str());
+        let translated_desc = entry.get("desc").and_then(|value| value.as_str());
+        let source_name = mod_lookup.get(mod_id).and_then(|mod_info| mod_info.name.as_deref());
+        let source_desc = mod_lookup
+            .get(mod_id)
+            .and_then(|mod_info| mod_info.description.as_deref());
 
-        if let Some(translated_desc) = entry.get("desc").and_then(|value| value.as_str()) {
-            if let Some(source_text) = mod_info.description.as_deref() {
-                db::translation_cache_set_db(&db, source_text, translated_desc, "compat")?;
-            }
+        db::saved_translation_upsert_db(
+            &db,
+            mod_id,
+            translated_name,
+            translated_desc,
+            source_name,
+            source_desc,
+        )?;
+
+        if let (Some(source_text), Some(translated)) = (source_name, translated_name) {
+            db::translation_cache_set_db(&db, source_text, translated, "compat")?;
+        }
+        if let (Some(source_text), Some(translated)) = (source_desc, translated_desc) {
+            db::translation_cache_set_db(&db, source_text, translated, "compat")?;
         }
     }
 

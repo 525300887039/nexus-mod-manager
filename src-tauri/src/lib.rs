@@ -29,6 +29,11 @@ pub fn run() {
             if let Err(err) = db::translations_migrate_json_to_db(&mut db_conn) {
                 eprintln!("Translation migration failed: {}", err);
             }
+            if let Some(game_path) = config::load_or_detect_game_path() {
+                if let Err(err) = db::sync_saved_translations_with_game_path_db(&mut db_conn, &game_path) {
+                    eprintln!("Saved translation sync failed: {}", err);
+                }
+            }
 
             app.manage(AppState {
                 db: Mutex::new(db_conn),

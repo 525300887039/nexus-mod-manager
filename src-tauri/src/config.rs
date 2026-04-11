@@ -1,4 +1,4 @@
-use crate::AppState;
+use crate::{db, AppState};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -157,12 +157,22 @@ pub async fn app_select_game_path(
 
     if let Some(folder_path) = folder {
         let gp = folder_path.to_string();
-        let mut state_gp = state.game_path.lock().unwrap();
-        *state_gp = Some(gp.clone());
+        {
+            let mut state_gp = state.game_path.lock().unwrap();
+            *state_gp = Some(gp.clone());
+        }
 
         let mut cfg = load_config();
         cfg.game_path = Some(gp.clone());
         save_config(&cfg);
+
+        {
+            let mut db = state
+                .db
+                .lock()
+                .map_err(|e| format!("数据库锁已损坏: {}", e))?;
+            db::sync_saved_translations_with_game_path_db(&mut db, &gp)?;
+        }
 
         let mods_dir = Path::new(&gp).join("mods").to_string_lossy().to_string();
         Ok(Some(InitResult {
