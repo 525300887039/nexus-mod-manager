@@ -139,6 +139,31 @@ fn extract_message_content(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn resolve_chat_completions_url(api_url: &str) -> Result<String, String> {
+    let trimmed = api_url.trim();
+    let mut parsed =
+        reqwest::Url::parse(trimmed).map_err(|e| format!("大模型 API 地址无效: {}", e))?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(format!(
+                "大模型 API 地址协议无效: {}，仅支持 http 或 https",
+                scheme
+            ))
+        }
+    }
+
+    let normalized_path = match parsed.path().trim_end_matches('/') {
+        "" | "/" => "/chat/completions".to_string(),
+        path if path.ends_with("/chat/completions") => path.to_string(),
+        path => format!("{}/chat/completions", path),
+    };
+
+    parsed.set_path(&normalized_path);
+    Ok(parsed.to_string())
+}
+
 pub async fn translate(text: &str, config: &LlmConfig) -> Result<String, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -146,6 +171,7 @@ pub async fn translate(text: &str, config: &LlmConfig) -> Result<String, String>
     }
 
     ensure_llm_ready(config)?;
+    let request_url = resolve_chat_completions_url(&config.api_url)?;
 
     let client = reqwest::Client::builder()
         // Only bound connection setup. Local/self-hosted backends may need much longer to
@@ -169,13 +195,13 @@ pub async fn translate(text: &str, config: &LlmConfig) -> Result<String, String>
     });
 
     let response = client
-        .post(&config.api_url)
+        .post(&request_url)
         .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
         .header(CONTENT_TYPE, "application/json")
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("请求大模型 API 失败: {}", e))?;
+        .map_err(|e| format!("请求大模型 API 失败 ({}): {}", request_url, e))?;
 
     let status = response.status();
     let body = response
@@ -189,7 +215,10 @@ pub async fn translate(text: &str, config: &LlmConfig) -> Result<String, String>
         } else {
             body
         };
-        return Err(format!("大模型 API 返回错误 {}: {}", status, detail));
+        return Err(format!(
+            "大模型 API 返回错误 {} ({}): {}",
+            status, request_url, detail
+        ));
     }
 
     if body.trim().is_empty() {
