@@ -1,10 +1,12 @@
 use crate::{config, mods, AppState};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::time::Duration;
 use tauri::State;
 
 const NEXUS_API_BASE: &str = "https://api.nexusmods.com/v1";
 const GAME_DOMAIN: &str = "slaythespire2";
 const USER_AGENT: &str = "STS2ModManager/2.0";
+const NEXUS_API_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(
@@ -210,7 +212,10 @@ async fn fetch_mod_by_id(
 async fn nexus_get<T: DeserializeOwned>(endpoint: &str, api_key: &str) -> Result<T, String> {
     let api_key = require_api_key(api_key)?;
     let url = format!("{NEXUS_API_BASE}{endpoint}");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(NEXUS_API_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("初始化 Nexus Mods HTTP 客户端失败: {}", e))?;
     let response = client
         .get(&url)
         .header("apikey", api_key)
@@ -227,6 +232,10 @@ async fn nexus_get<T: DeserializeOwned>(endpoint: &str, api_key: &str) -> Result
 
     if !status.is_success() {
         return Err(format_nexus_error(status, &body));
+    }
+
+    if body.trim().is_empty() {
+        return Err("Nexus Mods API 返回空响应".to_string());
     }
 
     serde_json::from_str::<T>(&body).map_err(|e| format!("解析 Nexus Mods API 响应失败: {}", e))

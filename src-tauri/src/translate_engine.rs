@@ -33,8 +33,8 @@ fn write_cached_translation(
 fn llm_mode(config: &translate_llm::LlmConfig) -> &str {
     match config.engine_mode.as_str() {
         "mymemory" => "mymemory",
-        "llm" => "llm",
-        "dual" => "dual",
+        "llm" if config.enabled => "llm",
+        "dual" if config.enabled => "dual",
         _ => {
             if config.enabled {
                 "dual"
