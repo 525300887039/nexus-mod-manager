@@ -108,6 +108,7 @@ export default function NexusModDetail({
   }, [mod]);
 
   const currentMod = { ...mod, ...detail };
+  const detailContent = currentMod.description || currentMod.summary || '';
   const translatedName = translationEntry?.name || '';
   const translatedDescription = useMemo(
     () => extractPlainTextFromNexusRichText(
@@ -131,9 +132,9 @@ export default function NexusModDetail({
       const result = await translateNexusModFields({
         modId: currentMod.modId,
         name: currentMod.name,
-        description: currentMod.description || '',
+        description: detailContent,
         existing: translationEntry,
-        includeDescription: true,
+        includeDescription: Boolean(detailContent),
       });
 
       if (result.translations && onTranslationsChange) {
@@ -312,26 +313,21 @@ export default function NexusModDetail({
               </p>
             ) : (
               <NexusRichText
-                content={currentMod.description || currentMod.summary}
+                content={detailContent}
                 className="text-sm leading-7 text-gray-700"
                 fallbackClassName="whitespace-pre-wrap break-words text-sm leading-7 text-gray-700"
                 emptyClassName="text-sm leading-7 text-gray-400"
               />
             )}
-            {translatedDescription && currentMod.description && (
+            {translatedDescription && detailContent && (
               <div className="mt-4 border-t border-gray-200 pt-4">
                 <NexusRichText
-                  content={currentMod.description}
+                  content={detailContent}
                   className="text-xs leading-6 text-gray-500"
                   fallbackClassName="whitespace-pre-wrap break-words text-xs leading-6 text-gray-500"
                   emptyText=""
                 />
               </div>
-            )}
-            {!currentMod.description && currentMod.summary && (
-              <p className="mt-4 border-t border-gray-200 pt-4 text-xs leading-6 text-gray-500">
-                摘要: {currentMod.summary}
-              </p>
             )}
             {translateError && (
               <p className="mt-3 text-xs text-red-500">翻译失败: {translateError}</p>
