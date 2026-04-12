@@ -45,7 +45,11 @@ fn main() {
         // Also show a message box on Windows
         #[cfg(target_os = "windows")]
         {
-            let msg = format!("应用启动失败！\n日志位于: {}\n\n错误: {:?}", log_path.display(), e);
+            let msg = format!(
+                "应用启动失败！\n日志位于: {}\n\n错误: {:?}",
+                log_path.display(),
+                e
+            );
             unsafe {
                 use std::ffi::CString;
                 let text = CString::new(msg).unwrap_or_default();
@@ -60,7 +64,12 @@ fn main() {
 unsafe fn winapi_messagebox(title: *const i8, text: *const i8) {
     #[link(name = "user32")]
     extern "system" {
-        fn MessageBoxA(hwnd: *mut std::ffi::c_void, text: *const i8, caption: *const i8, utype: u32) -> i32;
+        fn MessageBoxA(
+            hwnd: *mut std::ffi::c_void,
+            text: *const i8,
+            caption: *const i8,
+            utype: u32,
+        ) -> i32;
     }
     MessageBoxA(std::ptr::null_mut(), text, title, 0x10); // MB_ICONERROR
 }

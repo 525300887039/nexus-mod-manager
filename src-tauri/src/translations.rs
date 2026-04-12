@@ -75,7 +75,9 @@ fn persist_translation_cache_map(
 
         let translated_name = entry.get("name").and_then(|value| value.as_str());
         let translated_desc = entry.get("desc").and_then(|value| value.as_str());
-        let source_name = mod_lookup.get(mod_id).and_then(|mod_info| mod_info.name.as_deref());
+        let source_name = mod_lookup
+            .get(mod_id)
+            .and_then(|mod_info| mod_info.name.as_deref());
         let source_desc = mod_lookup
             .get(mod_id)
             .and_then(|mod_info| mod_info.description.as_deref());

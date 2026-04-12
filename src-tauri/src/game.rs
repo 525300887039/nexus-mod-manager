@@ -163,11 +163,19 @@ fn is_game_running() -> bool {
 pub fn game_get_version() -> GameVersion {
     let appdata = match get_appdata() {
         Some(d) => d,
-        None => return GameVersion { version: None, engine: None },
+        None => {
+            return GameVersion {
+                version: None,
+                engine: None,
+            }
+        }
     };
     let logs_dir = appdata.join("SlayTheSpire2").join("logs");
     if !logs_dir.exists() {
-        return GameVersion { version: None, engine: None };
+        return GameVersion {
+            version: None,
+            engine: None,
+        };
     }
 
     // Find rotated logs
@@ -225,7 +233,10 @@ pub fn game_get_version() -> GameVersion {
         }
     }
 
-    GameVersion { version: None, engine: None }
+    GameVersion {
+        version: None,
+        engine: None,
+    }
 }
 
 struct CrashPattern {
@@ -235,18 +246,66 @@ struct CrashPattern {
 }
 
 const CRASH_PATTERNS: &[CrashPattern] = &[
-    CrashPattern { pattern: "State divergence", reason: "联机状态不同步", detail: "你的客户端状态与房主不一致，被服务器踢出。确保双方 MOD 完全相同。" },
-    CrashPattern { pattern: "StateDivergence", reason: "联机状态不同步", detail: "你的客户端状态与房主不一致，被服务器踢出。确保双方 MOD 完全相同。" },
-    CrashPattern { pattern: "OutOfMemoryException", reason: "内存不足", detail: "游戏耗尽内存。尝试关闭后台程序，或减少加载的 MOD 数量。" },
-    CrashPattern { pattern: "out of memory", reason: "内存不足", detail: "游戏耗尽内存。尝试关闭后台程序，或减少加载的 MOD 数量。" },
-    CrashPattern { pattern: "StackOverflowException", reason: "堆栈溢出", detail: "可能是某个 MOD 导致无限递归。尝试逐个禁用 MOD 排查。" },
-    CrashPattern { pattern: "NullReferenceException", reason: "空引用异常", detail: "MOD 或游戏内部发生空引用异常。" },
-    CrashPattern { pattern: "is missing the 'id' field", reason: "MOD 清单格式错误", detail: "部分 MOD 的 manifest 文件缺少 id 字段，游戏无法加载这些 MOD。" },
-    CrashPattern { pattern: "Connection timed out", reason: "网络连接超时", detail: "联机服务器连接超时，检查网络状况或更换服务器。" },
-    CrashPattern { pattern: "FATAL", reason: "致命错误", detail: "游戏发生未处理的异常导致崩溃。" },
-    CrashPattern { pattern: "Unhandled exception", reason: "致命错误", detail: "游戏发生未处理的异常导致崩溃。" },
-    CrashPattern { pattern: "Application crashed", reason: "致命错误", detail: "游戏发生未处理的异常导致崩溃。" },
-    CrashPattern { pattern: "rendering device lost", reason: "显卡驱动崩溃", detail: "渲染设备丢失，尝试更新显卡驱动或降低画质设置。" },
+    CrashPattern {
+        pattern: "State divergence",
+        reason: "联机状态不同步",
+        detail: "你的客户端状态与房主不一致，被服务器踢出。确保双方 MOD 完全相同。",
+    },
+    CrashPattern {
+        pattern: "StateDivergence",
+        reason: "联机状态不同步",
+        detail: "你的客户端状态与房主不一致，被服务器踢出。确保双方 MOD 完全相同。",
+    },
+    CrashPattern {
+        pattern: "OutOfMemoryException",
+        reason: "内存不足",
+        detail: "游戏耗尽内存。尝试关闭后台程序，或减少加载的 MOD 数量。",
+    },
+    CrashPattern {
+        pattern: "out of memory",
+        reason: "内存不足",
+        detail: "游戏耗尽内存。尝试关闭后台程序，或减少加载的 MOD 数量。",
+    },
+    CrashPattern {
+        pattern: "StackOverflowException",
+        reason: "堆栈溢出",
+        detail: "可能是某个 MOD 导致无限递归。尝试逐个禁用 MOD 排查。",
+    },
+    CrashPattern {
+        pattern: "NullReferenceException",
+        reason: "空引用异常",
+        detail: "MOD 或游戏内部发生空引用异常。",
+    },
+    CrashPattern {
+        pattern: "is missing the 'id' field",
+        reason: "MOD 清单格式错误",
+        detail: "部分 MOD 的 manifest 文件缺少 id 字段，游戏无法加载这些 MOD。",
+    },
+    CrashPattern {
+        pattern: "Connection timed out",
+        reason: "网络连接超时",
+        detail: "联机服务器连接超时，检查网络状况或更换服务器。",
+    },
+    CrashPattern {
+        pattern: "FATAL",
+        reason: "致命错误",
+        detail: "游戏发生未处理的异常导致崩溃。",
+    },
+    CrashPattern {
+        pattern: "Unhandled exception",
+        reason: "致命错误",
+        detail: "游戏发生未处理的异常导致崩溃。",
+    },
+    CrashPattern {
+        pattern: "Application crashed",
+        reason: "致命错误",
+        detail: "游戏发生未处理的异常导致崩溃。",
+    },
+    CrashPattern {
+        pattern: "rendering device lost",
+        reason: "显卡驱动崩溃",
+        detail: "渲染设备丢失，尝试更新显卡驱动或降低画质设置。",
+    },
 ];
 
 fn read_log_safe(path: &Path) -> String {
@@ -326,7 +385,8 @@ pub fn game_analyze_crash() -> CrashReport {
     // Analyze loaded mods
     let mut loaded_mods: Vec<(String, String)> = Vec::new(); // (name, id)
     let mut failed_manifests: Vec<(String, String)> = Vec::new(); // (dir, file)
-    let mut error_mods: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut error_mods: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
     for line in content.lines() {
         // Track loaded mods
@@ -346,7 +406,8 @@ pub fn game_analyze_crash() -> CrashReport {
         }
 
         // Track failed manifests
-        if line.contains("[ERROR]") && line.contains("Mod manifest") && line.contains("is missing") {
+        if line.contains("[ERROR]") && line.contains("Mod manifest") && line.contains("is missing")
+        {
             // Extract dir and file from the path
             if let Some(mods_idx) = line.find("mods") {
                 let rest = &line[mods_idx..];
@@ -359,14 +420,26 @@ pub fn game_analyze_crash() -> CrashReport {
         }
 
         // Track errors mentioning mods
-        if line.contains("[ERROR]") && !line.contains("Mod manifest") && !line.contains("is missing the") {
+        if line.contains("[ERROR]")
+            && !line.contains("Mod manifest")
+            && !line.contains("is missing the")
+        {
             if let Some(mods_idx) = line.find("mods") {
                 let rest = &line[mods_idx..];
                 let parts: Vec<&str> = rest.split(|c| c == '\\' || c == '/').collect();
                 if parts.len() >= 2 {
-                    let mod_name = parts[1].trim_end_matches(".json").trim_end_matches(".dll").trim_end_matches(".pck").to_string();
+                    let mod_name = parts[1]
+                        .trim_end_matches(".json")
+                        .trim_end_matches(".dll")
+                        .trim_end_matches(".pck")
+                        .to_string();
                     let entry = error_mods.entry(mod_name).or_default();
-                    let msg = line.replace("[ERROR]", "").trim().chars().take(120).collect::<String>();
+                    let msg = line
+                        .replace("[ERROR]", "")
+                        .trim()
+                        .chars()
+                        .take(120)
+                        .collect::<String>();
                     entry.push(msg);
                 }
             }
@@ -374,13 +447,17 @@ pub fn game_analyze_crash() -> CrashReport {
     }
 
     // Cross-reference
-    let loaded_ids: std::collections::HashSet<String> = loaded_mods.iter().map(|(_, id)| id.clone()).collect();
+    let loaded_ids: std::collections::HashSet<String> =
+        loaded_mods.iter().map(|(_, id)| id.clone()).collect();
     let mut really_failed: Vec<String> = Vec::new();
     let mut config_warnings: Vec<String> = Vec::new();
 
     for (dir, file) in &failed_manifests {
         if loaded_ids.contains(dir) || loaded_mods.iter().any(|(_, id)| id == dir) {
-            config_warnings.push(format!("{}/{}: {} 不是 MOD 清单，是配置文件（MOD 已正常加载）", dir, file, file));
+            config_warnings.push(format!(
+                "{}/{}: {} 不是 MOD 清单，是配置文件（MOD 已正常加载）",
+                dir, file, file
+            ));
         } else {
             really_failed.push(dir.clone());
         }
@@ -405,7 +482,10 @@ pub fn game_analyze_crash() -> CrashReport {
             };
             if cp.reason == "MOD 清单格式错误" && !really_failed.is_empty() {
                 issue.mods = really_failed.clone();
-                issue.detail = format!("以下 MOD 的 manifest 文件缺少 id 字段: {}", really_failed.join(", "));
+                issue.detail = format!(
+                    "以下 MOD 的 manifest 文件缺少 id 字段: {}",
+                    really_failed.join(", ")
+                );
             }
             issues.push(issue);
         }
