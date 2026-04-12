@@ -107,6 +107,8 @@ pub fn run() {
             nexus_api::nexus_get_trending,
             nexus_api::nexus_get_latest_added,
             nexus_api::nexus_get_latest_updated,
+            nexus_api::nexus_get_recently_updated_page,
+            nexus_api::nexus_get_popular_page,
             nexus_api::nexus_get_mod,
             nexus_api::nexus_get_mod_files,
             nexus_api::nexus_find_mod_by_name,
