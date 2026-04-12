@@ -6,6 +6,8 @@ const REQUIRED_NEXUS_API_METHODS = [
   'nexusGetTrending',
   'nexusGetLatestAdded',
   'nexusGetLatestUpdated',
+  'nexusGetRecentlyUpdatedPage',
+  'nexusGetPopularPage',
   'nexusGetMod',
   'nexusGetModFiles',
   'translateSmart',

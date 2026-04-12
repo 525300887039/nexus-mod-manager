@@ -148,6 +148,18 @@ window.api = {
   nexusGetTrending: () => invoke('nexus_get_trending'),
   nexusGetLatestAdded: () => invoke('nexus_get_latest_added'),
   nexusGetLatestUpdated: () => invoke('nexus_get_latest_updated'),
+  nexusGetRecentlyUpdatedPage: (period, page, pageSize, forceRefresh = false) => invoke('nexus_get_recently_updated_page', {
+    period,
+    page,
+    pageSize,
+    forceRefresh,
+  }),
+  nexusGetPopularPage: (period, page, pageSize, forceRefresh = false) => invoke('nexus_get_popular_page', {
+    period,
+    page,
+    pageSize,
+    forceRefresh,
+  }),
   nexusGetMod: (modId) => invoke('nexus_get_mod', { modId }),
   nexusGetModFiles: (modId) => invoke('nexus_get_mod_files', { modId }),
   nexusFindModByName: (name) => invoke('nexus_find_mod_by_name', { name }),
