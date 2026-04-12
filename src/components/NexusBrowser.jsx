@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Globe,
   Languages,
+  Link2,
   Loader2,
   RefreshCw,
   Search,
@@ -19,6 +20,7 @@ import {
   hasNexusBrowserSupport,
   isChineseText,
   loadNexusTranslationsMap,
+  parseNexusModUrl,
   saveNexusTranslationsMap,
 } from './nexusShared';
 
@@ -239,9 +241,13 @@ export default function NexusBrowser({
   const [search, setSearch] = useState('');
   const [translations, setTranslations] = useState({});
   const [selectedMod, setSelectedMod] = useState(null);
+  const [selectedFileId, setSelectedFileId] = useState(null);
   const [translatingIds, setTranslatingIds] = useState({});
   const [translating, setTranslating] = useState(false);
   const [translateProgress, setTranslateProgress] = useState({ done: 0, total: 0 });
+  const [linkInput, setLinkInput] = useState('');
+  const [linkError, setLinkError] = useState('');
+  const [openingLink, setOpeningLink] = useState(false);
 
   const translationsRef = useRef({});
   const tabStatesRef = useRef(createAllTabStates());
@@ -296,6 +302,16 @@ export default function NexusBrowser({
     setTranslations(nextTranslations);
     await persistTranslations(nextTranslations);
     return nextTranslations[translationKey];
+  };
+
+  const handleSelectMod = (mod, fileId = null) => {
+    setSelectedMod(mod);
+    setSelectedFileId(fileId);
+  };
+
+  const handleCloseSelectedMod = () => {
+    setSelectedMod(null);
+    setSelectedFileId(null);
   };
 
   const fetchTab = async (tab, options = {}) => {
@@ -606,6 +622,54 @@ export default function NexusBrowser({
     onShowToast?.(`批量翻译完成，已处理 ${done} 个 Mod。`);
   };
 
+  const handleOpenModLink = async (event) => {
+    event?.preventDefault();
+
+    if (openingLink) {
+      return;
+    }
+
+    const rawValue = linkInput.trim();
+    if (!rawValue) {
+      setLinkError('请输入 Nexus Mod 链接');
+      return;
+    }
+
+    if (!hasApiKey) {
+      setLinkError('请先配置 Nexus Mods API Key，再通过链接打开 Mod 详情');
+      return;
+    }
+
+    setLinkError('');
+    setOpeningLink(true);
+
+    try {
+      const parsed = parseNexusModUrl(rawValue);
+      const [modResult, filesResult] = await Promise.allSettled([
+        window.api.nexusGetMod(parsed.modId),
+        window.api.nexusGetModFiles(parsed.modId),
+      ]);
+
+      if (modResult.status !== 'fulfilled') {
+        throw new Error(modResult.reason?.message || String(modResult.reason));
+      }
+
+      if (filesResult.status !== 'fulfilled') {
+        onShowToast?.(
+          `文件列表预加载失败: ${filesResult.reason?.message || String(filesResult.reason)}`,
+          'error',
+        );
+      }
+
+      setLinkInput(parsed.canonicalUrl);
+      handleSelectMod(modResult.value, parsed.fileId);
+    } catch (error) {
+      setLinkError(error?.message || String(error));
+    } finally {
+      setOpeningLink(false);
+    }
+  };
+
   const handleCancelTranslate = () => {
     translateAbortRef.current = true;
   };
@@ -691,6 +755,66 @@ export default function NexusBrowser({
               </div>
             )}
           </div>
+
+          {nexusSupported && (
+            <div className="mb-6 rounded-2xl border border-gray-100 bg-white px-4 py-4 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">通过链接打开 Mod</p>
+                  <p className="mt-1 text-xs leading-5 text-gray-500">
+                    直接粘贴 Slay the Spire 2 的 Nexus Mod 地址，应用会先跳到详情面板，再继续现有下载安装流程。
+                  </p>
+                </div>
+                {!hasApiKey && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate?.('settings', { tab: 'nexus' })}
+                    className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    <ShieldCheck size={14} />
+                    前往设置
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleOpenModLink} className="mt-4 flex flex-col gap-3 lg:flex-row">
+                <div className="relative flex-1">
+                  <Link2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    value={linkInput}
+                    onChange={(event) => {
+                      setLinkInput(event.target.value);
+                      if (linkError) {
+                        setLinkError('');
+                      }
+                    }}
+                    placeholder="粘贴 https://www.nexusmods.com/slaythespire2/mods/123 或文件页链接"
+                    disabled={openingLink}
+                    className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-900 outline-none transition-colors focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5 disabled:cursor-not-allowed disabled:bg-gray-50"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={openingLink}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
+                >
+                  {openingLink ? <Loader2 size={16} className="animate-spin" /> : <Link2 size={16} />}
+                  {openingLink ? '正在打开...' : '打开详情'}
+                </button>
+              </form>
+
+              {linkError && (
+                <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {linkError}
+                </div>
+              )}
+
+              <p className="mt-3 text-xs leading-5 text-gray-400">
+                支持 Mod 页面链接和带 `file_id` 的文件页链接；仅接受 Slay the Spire 2 的 Nexus Mods 地址。
+              </p>
+            </div>
+          )}
 
           {!nexusSupported ? (
             <div className="rounded-3xl border border-amber-100 bg-amber-50 px-8 py-12 text-center shadow-sm">
@@ -899,7 +1023,7 @@ export default function NexusBrowser({
                       mod={mod}
                       translationEntry={translations[getNexusTranslationKey(mod.modId)]}
                       translating={Boolean(translatingIds[mod.modId]) || translating}
-                      onClick={() => setSelectedMod(mod)}
+                      onClick={() => handleSelectMod(mod)}
                       onTranslate={() => handleTranslateCard(mod)}
                     />
                   ))}
@@ -913,8 +1037,9 @@ export default function NexusBrowser({
       {selectedMod && (
         <NexusModDetail
           mod={selectedMod}
+          initialFileId={selectedFileId}
           translationEntry={translations[getNexusTranslationKey(selectedMod.modId)]}
-          onClose={() => setSelectedMod(null)}
+          onClose={handleCloseSelectedMod}
           onTranslationsChange={(nextTranslations) => {
             setTranslations(nextTranslations);
             translationsRef.current = nextTranslations;
