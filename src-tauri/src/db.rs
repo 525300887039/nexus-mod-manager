@@ -1,5 +1,5 @@
-use crate::{config, mods, AppState};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use crate::{config, mods, nexus_api::NexusModInfo, AppState};
+use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -20,6 +20,82 @@ pub(crate) struct SavedTranslationRow {
 pub(crate) struct NexusSavedTranslationRow {
     pub name_translated: Option<String>,
     pub desc_translated: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
+#[serde(default, rename_all = "snake_case")]
+struct NexusModCacheRow {
+    #[serde(alias = "modId")]
+    mod_id: u64,
+    name: String,
+    summary: String,
+    description: Option<String>,
+    #[serde(alias = "pictureUrl")]
+    picture_url: Option<String>,
+    #[serde(alias = "modDownloads")]
+    mod_downloads: u64,
+    #[serde(alias = "modUniqueDownloads")]
+    mod_unique_downloads: u64,
+    #[serde(alias = "endorsementCount")]
+    endorsement_count: u64,
+    version: String,
+    author: String,
+    #[serde(alias = "uploadedBy")]
+    uploaded_by: String,
+    #[serde(alias = "categoryId")]
+    category_id: u64,
+    #[serde(alias = "createdTimestamp")]
+    created_timestamp: u64,
+    #[serde(alias = "updatedTimestamp")]
+    updated_timestamp: u64,
+    available: bool,
+    status: String,
+}
+
+impl From<&NexusModInfo> for NexusModCacheRow {
+    fn from(value: &NexusModInfo) -> Self {
+        Self {
+            mod_id: value.mod_id,
+            name: value.name.clone(),
+            summary: value.summary.clone(),
+            description: value.description.clone(),
+            picture_url: value.picture_url.clone(),
+            mod_downloads: value.mod_downloads,
+            mod_unique_downloads: value.mod_unique_downloads,
+            endorsement_count: value.endorsement_count,
+            version: value.version.clone(),
+            author: value.author.clone(),
+            uploaded_by: value.uploaded_by.clone(),
+            category_id: value.category_id,
+            created_timestamp: value.created_timestamp,
+            updated_timestamp: value.updated_timestamp,
+            available: value.available,
+            status: value.status.clone(),
+        }
+    }
+}
+
+impl From<NexusModCacheRow> for NexusModInfo {
+    fn from(value: NexusModCacheRow) -> Self {
+        Self {
+            mod_id: value.mod_id,
+            name: value.name,
+            summary: value.summary,
+            description: value.description,
+            picture_url: value.picture_url,
+            mod_downloads: value.mod_downloads,
+            mod_unique_downloads: value.mod_unique_downloads,
+            endorsement_count: value.endorsement_count,
+            version: value.version,
+            author: value.author,
+            uploaded_by: value.uploaded_by,
+            category_id: value.category_id,
+            created_timestamp: value.created_timestamp,
+            updated_timestamp: value.updated_timestamp,
+            available: value.available,
+            status: value.status,
+        }
+    }
 }
 
 fn app_data_dir() -> Result<PathBuf, String> {
@@ -265,6 +341,174 @@ pub(crate) fn nexus_saved_translations_load_db(
     }
 
     Ok(result)
+}
+
+pub(crate) fn nexus_mod_cache_upsert_db(
+    db: &Connection,
+    mods: &[NexusModInfo],
+) -> Result<(), String> {
+    if mods.is_empty() {
+        return Ok(());
+    }
+
+    let fetched_at = now_millis();
+
+    for mod_info in mods {
+        let data_json = serde_json::to_string(&NexusModCacheRow::from(mod_info))
+            .map_err(|e| format!("序列化 Nexus Mod 缓存失败 ({}): {}", mod_info.mod_id, e))?;
+        db.execute(
+            "INSERT INTO nexus_mod_cache (mod_id, data_json, fetched_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(mod_id) DO UPDATE SET
+               data_json = excluded.data_json,
+               fetched_at = excluded.fetched_at",
+            params![mod_info.mod_id, data_json, fetched_at],
+        )
+        .map_err(|e| format!("写入 Nexus Mod 缓存失败 ({}): {}", mod_info.mod_id, e))?;
+    }
+
+    Ok(())
+}
+
+pub(crate) fn nexus_mod_cache_load_db(db: &Connection) -> Result<Vec<NexusModInfo>, String> {
+    let mut stmt = db
+        .prepare("SELECT data_json FROM nexus_mod_cache ORDER BY fetched_at DESC, mod_id DESC")
+        .map_err(|e| format!("准备 Nexus Mod 缓存查询失败: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("读取 Nexus Mod 缓存失败: {}", e))?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        let data_json = row.map_err(|e| format!("读取 Nexus Mod 缓存行失败: {}", e))?;
+        let mod_info = serde_json::from_str::<NexusModCacheRow>(&data_json)
+            .map_err(|e| format!("解析 Nexus Mod 缓存失败: {}", e))?;
+        result.push(mod_info.into());
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn nexus_mod_cache_get_many_db(
+    db: &Connection,
+    mod_ids: &[u64],
+    max_age_millis: Option<i64>,
+) -> Result<HashMap<u64, NexusModInfo>, String> {
+    if mod_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut result = HashMap::new();
+    let fetched_after = max_age_millis.map(|max_age| now_millis().saturating_sub(max_age.max(0)));
+
+    for chunk in mod_ids.chunks(SQLITE_BATCH_SIZE) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut params = chunk
+            .iter()
+            .map(|mod_id| SqlValue::from(*mod_id as i64))
+            .collect::<Vec<_>>();
+        let sql = if let Some(fetched_after) = fetched_after {
+            params.push(SqlValue::from(fetched_after));
+            format!(
+                "SELECT mod_id, data_json FROM nexus_mod_cache WHERE mod_id IN ({}) AND fetched_at >= ?",
+                placeholders
+            )
+        } else {
+            format!(
+                "SELECT mod_id, data_json FROM nexus_mod_cache WHERE mod_id IN ({})",
+                placeholders
+            )
+        };
+        let mut stmt = db
+            .prepare(&sql)
+            .map_err(|e| format!("准备批量 Nexus Mod 缓存查询失败: {}", e))?;
+        let rows = stmt
+            .query_map(params_from_iter(params.iter()), |row| {
+                Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("执行批量 Nexus Mod 缓存查询失败: {}", e))?;
+
+        for row in rows {
+            let (mod_id, data_json) =
+                row.map_err(|e| format!("读取批量 Nexus Mod 缓存结果失败: {}", e))?;
+            let mod_info = serde_json::from_str::<NexusModCacheRow>(&data_json)
+                .map_err(|e| format!("解析批量 Nexus Mod 缓存失败 ({}): {}", mod_id, e))?;
+            result.insert(mod_id, mod_info.into());
+        }
+    }
+
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_nexus_mod(mod_id: u64) -> NexusModInfo {
+        NexusModInfo {
+            mod_id,
+            name: format!("mod-{mod_id}"),
+            summary: "summary".to_string(),
+            description: None,
+            picture_url: None,
+            mod_downloads: 1,
+            mod_unique_downloads: 1,
+            endorsement_count: 1,
+            version: "1.0.0".to_string(),
+            author: "author".to_string(),
+            uploaded_by: "uploader".to_string(),
+            category_id: 1,
+            created_timestamp: 1,
+            updated_timestamp: 1,
+            available: true,
+            status: "published".to_string(),
+        }
+    }
+
+    fn init_nexus_cache_test_db() -> Connection {
+        let db = Connection::open_in_memory().expect("open in-memory db");
+        db.execute_batch(
+            "CREATE TABLE nexus_mod_cache (
+                mod_id INTEGER PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                fetched_at INTEGER NOT NULL
+            );",
+        )
+        .expect("create nexus_mod_cache table");
+        db
+    }
+
+    #[test]
+    fn nexus_mod_cache_get_many_db_respects_fetched_at_ttl() {
+        let db = init_nexus_cache_test_db();
+        let fresh_mod = sample_nexus_mod(1);
+        let stale_mod = sample_nexus_mod(2);
+        let fresh_json = serde_json::to_string(&NexusModCacheRow::from(&fresh_mod)).unwrap();
+        let stale_json = serde_json::to_string(&NexusModCacheRow::from(&stale_mod)).unwrap();
+        let now = now_millis();
+
+        db.execute(
+            "INSERT INTO nexus_mod_cache (mod_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
+            params![1_u64, fresh_json, now],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO nexus_mod_cache (mod_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
+            params![2_u64, stale_json, now - 10_000],
+        )
+        .unwrap();
+
+        let fresh_only = nexus_mod_cache_get_many_db(&db, &[1, 2], Some(1_000)).unwrap();
+        assert!(fresh_only.contains_key(&1));
+        assert!(!fresh_only.contains_key(&2));
+
+        let all_rows = nexus_mod_cache_get_many_db(&db, &[1, 2], None).unwrap();
+        assert!(all_rows.contains_key(&1));
+        assert!(all_rows.contains_key(&2));
+    }
 }
 
 pub(crate) fn sync_saved_translations_with_game_path_db(
