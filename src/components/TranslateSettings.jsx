@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Database, Eye, EyeOff, Languages, RefreshCw, Save, Trash2 } from 'lucide-react';
 
-const DEFAULT_SYSTEM_PROMPT = '你是一个游戏MOD翻译助手，请将以下英文翻译成简体中文，保留专有名词不翻译。只返回翻译结果，不要添加任何解释。';
+const LEGACY_DEFAULT_SYSTEM_PROMPT = '你是一个游戏MOD翻译助手，请将以下英文翻译成简体中文，保留专有名词不翻译。只返回翻译结果，不要添加任何解释。';
+const DEFAULT_SYSTEM_PROMPT = '你是一个游戏MOD翻译助手，请将以下英文翻译成简体中文，保留专有名词不翻译。保持原文的结构、段落、列表、换行和标点风格；如果原始文本存在明显的格式问题，例如换行错乱、段落断裂、列表混乱或空白异常，请在不改变原意的前提下做必要修复；如果原始文本格式正常，则不要额外调整格式。只返回最终翻译结果，不要添加任何解释。';
 
 const DEFAULT_CONFIG = {
   enabled: false,
@@ -30,6 +31,14 @@ const ENGINE_OPTIONS = [
   },
 ];
 
+function normalizeSystemPrompt(systemPrompt) {
+  const trimmed = systemPrompt?.trim();
+  if (!trimmed || trimmed === LEGACY_DEFAULT_SYSTEM_PROMPT) {
+    return DEFAULT_SYSTEM_PROMPT;
+  }
+  return trimmed;
+}
+
 function normalizeConfig(raw = {}) {
   const engineMode = ['mymemory', 'llm', 'dual'].includes(raw.engineMode)
     ? raw.engineMode
@@ -41,7 +50,7 @@ function normalizeConfig(raw = {}) {
     ...DEFAULT_CONFIG,
     ...raw,
     engineMode,
-    systemPrompt: raw.systemPrompt?.trim() || DEFAULT_SYSTEM_PROMPT,
+    systemPrompt: normalizeSystemPrompt(raw.systemPrompt),
   };
 }
 
