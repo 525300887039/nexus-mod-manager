@@ -484,8 +484,35 @@ fn detect_archive_format_from_extension(path: &Path) -> Option<ArchiveFormat> {
     }
 }
 
+fn detect_archive_format_from_signature(path: &Path) -> Option<ArchiveFormat> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut header = [0u8; 8];
+    let bytes_read = file.read(&mut header).ok()?;
+    let header = &header[..bytes_read];
+
+    if header.starts_with(&[0x50, 0x4B, 0x03, 0x04])
+        || header.starts_with(&[0x50, 0x4B, 0x05, 0x06])
+        || header.starts_with(&[0x50, 0x4B, 0x07, 0x08])
+    {
+        return Some(ArchiveFormat::Zip);
+    }
+
+    if header.starts_with(&[0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00])
+        || header.starts_with(&[0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00])
+    {
+        return Some(ArchiveFormat::Rar);
+    }
+
+    if header.starts_with(&[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C]) {
+        return Some(ArchiveFormat::SevenZip);
+    }
+
+    None
+}
+
 fn detect_archive_format(path: &Path) -> Option<ArchiveFormat> {
     detect_archive_format_from_extension(path)
+        .or_else(|| detect_archive_format_from_signature(path))
 }
 
 pub(crate) fn is_supported_archive_path(path: &Path) -> bool {
@@ -1281,6 +1308,32 @@ mod tests {
         assert_eq!(sanitize_archive_path("../evil.dll"), None);
         assert_eq!(sanitize_archive_path("/absolute/path.dll"), None);
         assert_eq!(sanitize_archive_path("C:/evil.dll"), None);
+    }
+
+    #[test]
+    fn detect_archive_format_falls_back_to_signature_without_extension() {
+        let temp_dir = make_temp_dir("signature");
+
+        let zip_path = temp_dir.join("downloaded-zip");
+        fs::write(&zip_path, [0x50, 0x4B, 0x03, 0x04, 0x14, 0x00]).unwrap();
+        assert_eq!(detect_archive_format(&zip_path), Some(ArchiveFormat::Zip));
+
+        let rar_path = temp_dir.join("downloaded-rar");
+        fs::write(&rar_path, [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00]).unwrap();
+        assert_eq!(detect_archive_format(&rar_path), Some(ArchiveFormat::Rar));
+
+        let sevenz_path = temp_dir.join("downloaded-7z");
+        fs::write(&sevenz_path, [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00]).unwrap();
+        assert_eq!(
+            detect_archive_format(&sevenz_path),
+            Some(ArchiveFormat::SevenZip)
+        );
+
+        let unknown_path = temp_dir.join("downloaded-unknown");
+        fs::write(&unknown_path, [0x00, 0x11, 0x22, 0x33]).unwrap();
+        assert_eq!(detect_archive_format(&unknown_path), None);
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
