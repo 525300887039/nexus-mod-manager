@@ -645,24 +645,10 @@ export default function NexusBrowser({
 
     try {
       const parsed = parseNexusModUrl(rawValue);
-      const [modResult, filesResult] = await Promise.allSettled([
-        window.api.nexusGetMod(parsed.modId),
-        window.api.nexusGetModFiles(parsed.modId),
-      ]);
-
-      if (modResult.status !== 'fulfilled') {
-        throw new Error(modResult.reason?.message || String(modResult.reason));
-      }
-
-      if (filesResult.status !== 'fulfilled') {
-        onShowToast?.(
-          `文件列表预加载失败: ${filesResult.reason?.message || String(filesResult.reason)}`,
-          'error',
-        );
-      }
+      const mod = await window.api.nexusGetMod(parsed.modId);
 
       setLinkInput(parsed.canonicalUrl);
-      handleSelectMod(modResult.value, parsed.fileId);
+      handleSelectMod(mod, parsed.fileId);
     } catch (error) {
       setLinkError(error?.message || String(error));
     } finally {

@@ -136,6 +136,7 @@ export default function NexusModDetail({
   const autoDownloadSupported = typeof window.api?.openNexusDownload === 'function';
   const preferredFileCanAutoInstall = canAutoInstallFile(preferredFile);
   const missingLinkedFile = initialFileId != null && !loading && files.length > 0 && !linkedFile;
+  const pendingLinkedFile = initialFileId != null && loading && !linkedFile;
 
   const handleTranslate = async () => {
     setTranslating(true);
@@ -164,8 +165,10 @@ export default function NexusModDetail({
   };
 
   const handleOpenDownload = async (file = preferredFile) => {
+    const targetFileId = file?.fileId ?? (pendingLinkedFile ? initialFileId : null);
     const fileName = file?.fileName || file?.name || currentMod.name || 'Nexus Mod';
     const canAutoInstall = canAutoInstallFile(file);
+    const openingSpecificFile = targetFileId != null;
 
     if (!autoDownloadSupported) {
       const message = '当前运行环境不支持内嵌 Nexus 下载窗口';
@@ -181,14 +184,18 @@ export default function NexusModDetail({
     setOpeningDownload(true);
     onNexusDownloadStatusChange?.({
       phase: 'preparing',
-      message: canAutoInstall
-        ? `正在打开 ${fileName} 的下载页...`
-        : `正在打开 ${fileName} 的下载页（该文件仅下载，不会自动安装）...`,
+      message: pendingLinkedFile
+        ? `正在打开 ${fileName} 的目标文件下载页...`
+        : canAutoInstall
+          ? `正在打开 ${fileName} 的下载页...`
+          : openingSpecificFile
+            ? `正在打开 ${fileName} 的目标文件下载页（文件类型待确认）...`
+            : `正在打开 ${fileName} 的下载页（该文件仅下载，不会自动安装）...`,
       fileName,
     });
 
     try {
-      await window.api.openNexusDownload(currentMod.modId, file?.fileId ?? null);
+      await window.api.openNexusDownload(currentMod.modId, targetFileId);
     } catch (error) {
       const message = `打开下载窗口失败: ${error?.message || String(error)}`;
       onNexusDownloadStatusChange?.({
@@ -462,7 +469,9 @@ export default function NexusModDetail({
           {openingDownload ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
           {openingDownload
             ? '正在打开下载页...'
-            : preferredFileCanAutoInstall ? '下载安装' : '下载文件'}
+            : pendingLinkedFile
+              ? '打开目标文件'
+              : preferredFileCanAutoInstall ? '下载安装' : '下载文件'}
         </button>
         <button
           type="button"
