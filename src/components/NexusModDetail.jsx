@@ -45,6 +45,7 @@ function canAutoInstallFile(file) {
 
 export default function NexusModDetail({
   mod,
+  initialFileId = null,
   translationEntry,
   onClose,
   onTranslationsChange,
@@ -117,12 +118,24 @@ export default function NexusModDetail({
     [currentMod.description, translationEntry],
   );
   const fileGroups = useMemo(() => groupFilesByCategory(files), [files]);
+  const linkedFile = useMemo(
+    () => (
+      initialFileId == null
+        ? null
+        : files.find((file) => file.fileId === initialFileId) || null
+    ),
+    [files, initialFileId],
+  );
   const preferredFile = useMemo(
-    () => files.find((file) => (file.categoryName || '').toUpperCase() === 'MAIN') || files[0] || null,
-    [files],
+    () => linkedFile
+      || files.find((file) => (file.categoryName || '').toUpperCase() === 'MAIN')
+      || files[0]
+      || null,
+    [files, linkedFile],
   );
   const autoDownloadSupported = typeof window.api?.openNexusDownload === 'function';
   const preferredFileCanAutoInstall = canAutoInstallFile(preferredFile);
+  const missingLinkedFile = initialFileId != null && !loading && files.length > 0 && !linkedFile;
 
   const handleTranslate = async () => {
     setTranslating(true);
@@ -358,6 +371,12 @@ export default function NexusModDetail({
             )}
           </div>
 
+          {missingLinkedFile && (
+            <div className="mb-3 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              链接指定的文件未找到，已回退到当前 Mod 的默认下载文件。
+            </div>
+          )}
+
           {fileGroups.length === 0 && !loading ? (
             <div className="rounded-2xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-400">
               暂无文件信息
@@ -369,10 +388,24 @@ export default function NexusModDetail({
                   <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">{category}</p>
                   <div className="mt-3 space-y-3">
                     {categoryFiles.map((file) => (
-                      <div key={file.fileId} className="rounded-xl bg-gray-50 px-4 py-3">
+                      <div
+                        key={file.fileId}
+                        className={`rounded-xl px-4 py-3 ${
+                          initialFileId != null && file.fileId === initialFileId
+                            ? 'border border-blue-200 bg-blue-50'
+                            : 'bg-gray-50'
+                        }`}
+                      >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-gray-900">{file.name || file.fileName}</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="truncate text-sm font-medium text-gray-900">{file.name || file.fileName}</p>
+                              {initialFileId != null && file.fileId === initialFileId && (
+                                <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                                  链接目标
+                                </span>
+                              )}
+                            </div>
                             <p className="mt-1 text-xs text-gray-500">{file.version || '未知版本'}</p>
                           </div>
                           <FileArchive size={16} className="mt-1 flex-shrink-0 text-gray-300" />

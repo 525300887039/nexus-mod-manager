@@ -123,6 +123,61 @@ export function sanitizeExternalUrl(rawUrl) {
   return null;
 }
 
+export function parseNexusModUrl(rawUrl) {
+  const sanitized = sanitizeExternalUrl(rawUrl);
+  if (!sanitized) {
+    throw new Error('请输入有效的 Nexus Mods 链接');
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(sanitized);
+  } catch (_error) {
+    throw new Error('请输入有效的 Nexus Mods 链接');
+  }
+
+  if (!['nexusmods.com', 'www.nexusmods.com'].includes(parsed.hostname)) {
+    throw new Error('仅支持 nexusmods.com 的 Mod 页面链接');
+  }
+
+  const segments = parsed.pathname
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (segments[0] !== 'slaythespire2' || segments[1] !== 'mods') {
+    throw new Error('仅支持 Slay the Spire 2 的 Nexus Mod 链接');
+  }
+
+  const modIdValue = segments[2] || '';
+  if (!/^\d+$/.test(modIdValue)) {
+    throw new Error('链接中缺少有效的 Mod ID');
+  }
+
+  const modId = Number.parseInt(modIdValue, 10);
+  const rawFileId = parsed.searchParams.get('file_id');
+  let fileId = null;
+
+  if (rawFileId !== null && rawFileId !== '') {
+    if (!/^\d+$/.test(rawFileId)) {
+      throw new Error('链接中的 file_id 无效');
+    }
+    fileId = Number.parseInt(rawFileId, 10);
+  }
+
+  const canonicalUrl = fileId
+    ? `https://www.nexusmods.com/slaythespire2/mods/${modId}?tab=files&file_id=${fileId}`
+    : parsed.searchParams.get('tab') === 'files'
+      ? `https://www.nexusmods.com/slaythespire2/mods/${modId}?tab=files`
+      : `https://www.nexusmods.com/slaythespire2/mods/${modId}`;
+
+  return {
+    modId,
+    fileId,
+    canonicalUrl,
+  };
+}
+
 export function normalizeNexusRichText(raw) {
   if (!raw) {
     return '';
