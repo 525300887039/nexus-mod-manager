@@ -65,7 +65,23 @@ export function isChineseText(text) {
   if (!text) {
     return false;
   }
-  return /[\u4e00-\u9fff]/.test(text);
+
+  const normalized = String(text).trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const chineseCount = (normalized.match(/[\u4e00-\u9fff]/g) || []).length;
+  if (chineseCount === 0) {
+    return false;
+  }
+
+  const latinCount = (normalized.match(/[A-Za-z]/g) || []).length;
+  if (latinCount === 0) {
+    return true;
+  }
+
+  return chineseCount / (chineseCount + latinCount) >= 0.6;
 }
 
 function decodeHtmlEntities(text) {
