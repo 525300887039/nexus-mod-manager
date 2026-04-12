@@ -6,7 +6,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const DEFAULT_SYSTEM_PROMPT: &str = "你是一个游戏MOD翻译助手，请将以下英文翻译成简体中文，保留专有名词不翻译。只返回翻译结果，不要添加任何解释。";
+const LEGACY_DEFAULT_SYSTEM_PROMPT: &str =
+    "你是一个游戏MOD翻译助手，请将以下英文翻译成简体中文，保留专有名词不翻译。只返回翻译结果，不要添加任何解释。";
+const DEFAULT_SYSTEM_PROMPT: &str = "你是一个游戏MOD翻译助手，请将以下英文翻译成简体中文，保留专有名词不翻译。保持原文的结构、段落、列表、换行和标点风格；如果原始文本存在明显的格式问题，例如换行错乱、段落断裂、列表混乱或空白异常，请在不改变原意的前提下做必要修复；如果原始文本格式正常，则不要额外调整格式。只返回最终翻译结果，不要添加任何解释。";
 const LLM_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -52,15 +54,20 @@ fn normalize_engine_mode(engine_mode: &str, enabled: bool) -> String {
     }
 }
 
+fn normalize_system_prompt(system_prompt: &str) -> String {
+    let trimmed = system_prompt.trim();
+    if trimmed.is_empty() || trimmed == LEGACY_DEFAULT_SYSTEM_PROMPT {
+        DEFAULT_SYSTEM_PROMPT.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn sanitize_for_runtime(mut config: LlmConfig) -> LlmConfig {
     config.api_url = config.api_url.trim().to_string();
     config.api_key = config.api_key.trim().to_string();
     config.model = config.model.trim().to_string();
-    if config.system_prompt.trim().is_empty() {
-        config.system_prompt = DEFAULT_SYSTEM_PROMPT.to_string();
-    } else {
-        config.system_prompt = config.system_prompt.trim().to_string();
-    }
+    config.system_prompt = normalize_system_prompt(&config.system_prompt);
     config.engine_mode = normalize_engine_mode(&config.engine_mode, config.enabled);
     config
 }
