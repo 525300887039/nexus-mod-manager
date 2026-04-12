@@ -788,12 +788,50 @@ fn promote_prepared_tree(prepared_root: &Path, mods_dir: &Path) -> Result<(), St
     for entry in entries {
         let src_path = entry.path();
         let dest_path = mods_dir.join(entry.file_name());
-        remove_path_if_exists(&dest_path)?;
-        fs::rename(&src_path, &dest_path)
-            .map_err(|e| format!("无法安装到 {}: {}", dest_path.display(), e))?;
+        merge_install_path(&src_path, &dest_path)?;
     }
 
     Ok(())
+}
+
+fn merge_install_path(src_path: &Path, dest_path: &Path) -> Result<(), String> {
+    if src_path.is_dir() {
+        if !dest_path.exists() {
+            fs::rename(src_path, dest_path)
+                .map_err(|e| format!("无法安装到 {}: {}", dest_path.display(), e))?;
+            return Ok(());
+        }
+
+        if !dest_path.is_dir() {
+            remove_path_if_exists(dest_path)?;
+            fs::rename(src_path, dest_path)
+                .map_err(|e| format!("无法安装到 {}: {}", dest_path.display(), e))?;
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(src_path)
+            .map_err(|e| format!("无法读取目录 {}: {}", src_path.display(), e))?
+        {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let child_src = entry.path();
+            let child_dest = dest_path.join(entry.file_name());
+            merge_install_path(&child_src, &child_dest)?;
+        }
+
+        fs::remove_dir(src_path)
+            .map_err(|e| format!("无法清理临时目录 {}: {}", src_path.display(), e))?;
+        return Ok(());
+    }
+
+    if dest_path.exists() {
+        remove_path_if_exists(dest_path)?;
+    } else if let Some(parent) = dest_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("无法创建目录 {}: {}", parent.display(), e))?;
+    }
+
+    fs::rename(src_path, dest_path)
+        .map_err(|e| format!("无法安装到 {}: {}", dest_path.display(), e))
 }
 
 fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
@@ -1402,5 +1440,38 @@ mod tests {
 
         let _ = fs::remove_dir_all(&extracted);
         let _ = fs::remove_dir_all(&prepared);
+    }
+
+    #[test]
+    fn promote_prepared_tree_preserves_existing_unmanaged_files() {
+        let prepared = make_temp_dir("promote-prepared");
+        let mods_dir = make_temp_dir("promote-mods");
+
+        write_file(
+            &prepared.join("ExampleMod").join("ExampleMod.dll"),
+            "new-binary",
+        );
+        write_file(
+            &mods_dir.join("ExampleMod").join("user-config.json"),
+            "{\"keep\":true}",
+        );
+        write_file(
+            &mods_dir.join("ExampleMod").join("ExampleMod.dll"),
+            "old-binary",
+        );
+
+        promote_prepared_tree(&prepared, &mods_dir).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(mods_dir.join("ExampleMod").join("ExampleMod.dll")).unwrap(),
+            "new-binary"
+        );
+        assert_eq!(
+            fs::read_to_string(mods_dir.join("ExampleMod").join("user-config.json")).unwrap(),
+            "{\"keep\":true}"
+        );
+
+        let _ = fs::remove_dir_all(&prepared);
+        let _ = fs::remove_dir_all(&mods_dir);
     }
 }
