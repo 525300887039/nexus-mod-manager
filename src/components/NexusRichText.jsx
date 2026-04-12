@@ -110,6 +110,20 @@ function renderNode(node, key) {
       if (!node.children?.length) {
         return null;
       }
+      if (node.ordered) {
+        return (
+          <ol
+            key={key}
+            className="my-3 space-y-2 pl-5 marker:text-gray-400"
+            style={{ listStyleType: node.markerType || 'decimal' }}
+          >
+            {node.children
+              .filter((child) => child?.type === 'item')
+              .map((child, index) => renderNode(child, `${key}-item-${index}`))
+              .filter(Boolean)}
+          </ol>
+        );
+      }
       return (
         <ul key={key} className="my-3 list-disc space-y-2 pl-5 marker:text-gray-400">
           {node.children

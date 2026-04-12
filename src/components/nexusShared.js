@@ -19,7 +19,7 @@ const HTML_PARAGRAPH_OPEN_RE = /<p\b[^>]*>/gi;
 const HTML_PARAGRAPH_CLOSE_RE = /<\/p>/gi;
 const HTML_DIV_OPEN_RE = /<div\b[^>]*>/gi;
 const HTML_DIV_CLOSE_RE = /<\/div>/gi;
-const HTML_LIST_OPEN_RE = /<(ul|ol)\b[^>]*>/gi;
+const HTML_LIST_OPEN_RE = /<(ul|ol)\b([^>]*)>/gi;
 const HTML_LIST_CLOSE_RE = /<\/(ul|ol)>/gi;
 const HTML_LIST_ITEM_OPEN_RE = /<li\b[^>]*>/gi;
 const HTML_LIST_ITEM_CLOSE_RE = /<\/li>/gi;
@@ -33,7 +33,7 @@ const HTML_ANCHOR_OPEN_RE = /<a\b[^>]*href\s*=\s*(['"]?)([^'" >]+)\1[^>]*>/gi;
 const HTML_ANCHOR_CLOSE_RE = /<\/a>/gi;
 const HTML_TAG_RE = /<[^>]+>/g;
 const HTML_ENTITY_RE = /&(#x?[0-9a-f]+|[a-z]+);/gi;
-const DISCARDABLE_BBCODE_RE = /^\/?[a-z*][a-z0-9-]*(?:=[^\]]*)?$/i;
+const HTML_ORDERED_LIST_TYPE_RE = /\btype\s*=\s*(['"]?)([1aAiI])\1/i;
 const SUPPORTED_BBCODE_TAGS = new Set(['b', 'i', 'u', 'url', 'list', 'size']);
 const HTML_ENTITY_MAP = {
   amp: '&',
@@ -120,7 +120,14 @@ export function normalizeNexusRichText(raw) {
       .replace(HTML_PARAGRAPH_CLOSE_RE, '\n\n')
       .replace(HTML_DIV_OPEN_RE, '')
       .replace(HTML_DIV_CLOSE_RE, '\n')
-      .replace(HTML_LIST_OPEN_RE, '[list]')
+      .replace(HTML_LIST_OPEN_RE, (_match, tagName, attributes = '') => {
+        if (String(tagName).toLowerCase() === 'ol') {
+          const orderedTypeMatch = String(attributes).match(HTML_ORDERED_LIST_TYPE_RE);
+          const orderedType = orderedTypeMatch?.[2] || '1';
+          return `[list=${orderedType}]`;
+        }
+        return '[list]';
+      })
       .replace(HTML_LIST_CLOSE_RE, '[/list]')
       .replace(HTML_LIST_ITEM_OPEN_RE, '[*]')
       .replace(HTML_LIST_ITEM_CLOSE_RE, '\n')
@@ -167,12 +174,6 @@ function parseBbCodeTag(rawTagContent) {
       };
     }
 
-    if (DISCARDABLE_BBCODE_RE.test(lowerTag)) {
-      return {
-        kind: 'discard',
-      };
-    }
-
     return null;
   }
 
@@ -188,13 +189,27 @@ function parseBbCodeTag(rawTagContent) {
     };
   }
 
-  if (DISCARDABLE_BBCODE_RE.test(lowerTag)) {
-    return {
-      kind: 'discard',
-    };
-  }
-
   return null;
+}
+
+function getListStyle(rawValue) {
+  const marker = String(rawValue || '').trim();
+  switch (marker) {
+    case '1':
+      return { ordered: true, markerType: 'decimal' };
+    case 'a':
+      return { ordered: true, markerType: 'lower-alpha' };
+    case 'A':
+      return { ordered: true, markerType: 'upper-alpha' };
+    case 'i':
+      return { ordered: true, markerType: 'lower-roman' };
+    case 'I':
+      return { ordered: true, markerType: 'upper-roman' };
+    case '':
+      return { ordered: false, markerType: 'disc' };
+    default:
+      return { ordered: true, markerType: 'decimal' };
+  }
 }
 
 function tokenizeNexusRichText(raw) {
@@ -352,16 +367,22 @@ export function parseNexusRichText(raw) {
     }
 
     if (token.type === 'open') {
-      const nextNode = {
-        type: token.name === 'b'
-          ? 'bold'
-          : token.name === 'i'
-            ? 'italic'
-            : token.name === 'u'
-              ? 'underline'
-              : token.name,
-        children: [],
-      };
+      const nextNode = token.name === 'list'
+        ? {
+          type: 'list',
+          ...getListStyle(token.value),
+          children: [],
+        }
+        : {
+          type: token.name === 'b'
+            ? 'bold'
+            : token.name === 'i'
+              ? 'italic'
+              : token.name === 'u'
+                ? 'underline'
+                : token.name,
+          children: [],
+        };
 
       if (token.name === 'url') {
         nextNode.href = token.value || '';
@@ -390,39 +411,130 @@ export function parseNexusRichText(raw) {
   return root.children;
 }
 
-export function extractPlainTextFromNexusRichText(raw) {
-  const tokens = tokenizeNexusRichText(raw);
-  if (tokens.length === 0) {
-    return '';
+function formatAlphabeticIndex(index, uppercase = false) {
+  let value = Math.max(1, index);
+  let result = '';
+
+  while (value > 0) {
+    value -= 1;
+    result = String.fromCharCode(97 + (value % 26)) + result;
+    value = Math.floor(value / 26);
   }
 
-  let text = '';
-  let pendingBullet = false;
+  return uppercase ? result.toUpperCase() : result;
+}
 
-  tokens.forEach((token) => {
-    if (token.type === 'text') {
-      text += pendingBullet ? `• ${token.value}` : token.value;
-      pendingBullet = false;
-      return;
-    }
+function formatRomanIndex(index, uppercase = false) {
+  const romanDigits = [
+    ['M', 1000],
+    ['CM', 900],
+    ['D', 500],
+    ['CD', 400],
+    ['C', 100],
+    ['XC', 90],
+    ['L', 50],
+    ['XL', 40],
+    ['X', 10],
+    ['IX', 9],
+    ['V', 5],
+    ['IV', 4],
+    ['I', 1],
+  ];
+  let value = Math.max(1, index);
+  let result = '';
 
-    if (token.type === 'br') {
-      text = text.replace(/[ \t]+$/g, '');
-      text += '\n';
-      pendingBullet = false;
-      return;
-    }
-
-    if (token.type === 'item') {
-      text = text.replace(/[ \t]+$/g, '');
-      if (text && !text.endsWith('\n')) {
-        text += '\n';
-      }
-      pendingBullet = true;
+  romanDigits.forEach(([symbol, amount]) => {
+    while (value >= amount) {
+      result += symbol;
+      value -= amount;
     }
   });
 
+  return uppercase ? result : result.toLowerCase();
+}
+
+function formatListMarker(index, markerType) {
+  switch (markerType) {
+    case 'lower-alpha':
+      return `${formatAlphabeticIndex(index, false)}.`;
+    case 'upper-alpha':
+      return `${formatAlphabeticIndex(index, true)}.`;
+    case 'lower-roman':
+      return `${formatRomanIndex(index, false)}.`;
+    case 'upper-roman':
+      return `${formatRomanIndex(index, true)}.`;
+    case 'decimal':
+    default:
+      return `${index}.`;
+  }
+}
+
+function indentMultilineText(text, indent) {
+  if (!text.includes('\n')) {
+    return text;
+  }
+
   return text
+    .split('\n')
+    .map((line, index) => (index === 0 ? line : `${indent}${line}`))
+    .join('\n');
+}
+
+function extractPlainTextFromNodes(nodes) {
+  return nodes.reduce((result, node, index) => {
+    if (!node) {
+      return result;
+    }
+
+    if (node.type === 'text') {
+      return result + node.value;
+    }
+
+    if (node.type === 'br') {
+      return `${result.replace(/[ \t]+$/g, '')}\n`;
+    }
+
+    if (node.type === 'list') {
+      const items = (node.children || []).filter((child) => child?.type === 'item');
+      if (items.length === 0) {
+        return result;
+      }
+
+      const listText = items.map((item, itemIndex) => {
+        const marker = node.ordered
+          ? formatListMarker(itemIndex + 1, node.markerType)
+          : '•';
+        const itemText = extractPlainTextFromNodes(item.children || []).trim();
+        if (!itemText) {
+          return marker;
+        }
+        return `${marker} ${indentMultilineText(itemText, ' '.repeat(marker.length + 1))}`;
+      }).join('\n');
+
+      const prefix = result && !result.endsWith('\n') ? '\n' : '';
+      const suffix = index < nodes.length - 1 ? '\n' : '';
+      return `${result}${prefix}${listText}${suffix}`;
+    }
+
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      const childText = extractPlainTextFromNodes(node.children);
+      if (node.type === 'url' && !childText.trim()) {
+        return result + (sanitizeExternalUrl(node.href) || '');
+      }
+      return result + childText;
+    }
+
+    return result;
+  }, '');
+}
+
+export function extractPlainTextFromNexusRichText(raw) {
+  const nodes = parseNexusRichText(raw);
+  if (nodes.length === 0) {
+    return '';
+  }
+
+  return extractPlainTextFromNodes(nodes)
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
