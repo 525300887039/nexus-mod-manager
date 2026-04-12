@@ -12,11 +12,13 @@ import {
   X,
 } from 'lucide-react';
 import {
+  extractPlainTextFromNexusRichText,
   formatBytes,
   formatCompactNumber,
   formatUnixDateTime,
   translateNexusModFields,
 } from './nexusShared';
+import NexusRichText from './NexusRichText';
 
 const CATEGORY_ORDER = ['MAIN', 'UPDATE', 'OPTIONAL'];
 
@@ -107,7 +109,12 @@ export default function NexusModDetail({
 
   const currentMod = { ...mod, ...detail };
   const translatedName = translationEntry?.name || '';
-  const translatedDescription = translationEntry?.desc || (!currentMod.description ? translationEntry?.summary || '' : '');
+  const translatedDescription = useMemo(
+    () => extractPlainTextFromNexusRichText(
+      translationEntry?.desc || (!currentMod.description ? translationEntry?.summary || '' : ''),
+    ),
+    [currentMod.description, translationEntry],
+  );
   const fileGroups = useMemo(() => groupFilesByCategory(files), [files]);
   const preferredFile = useMemo(
     () => files.find((file) => (file.categoryName || '').toUpperCase() === 'MAIN') || files[0] || null,
@@ -299,13 +306,27 @@ export default function NexusModDetail({
             </button>
           </div>
           <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
-            <p className="whitespace-pre-wrap text-sm leading-7 text-gray-700">
-              {translatedDescription || currentMod.description || currentMod.summary || '暂无描述'}
-            </p>
-            {translatedDescription && currentMod.description && (
-              <p className="mt-4 whitespace-pre-wrap border-t border-gray-200 pt-4 text-xs leading-6 text-gray-400">
-                {currentMod.description}
+            {translatedDescription ? (
+              <p className="whitespace-pre-wrap break-words text-sm leading-7 text-gray-700">
+                {translatedDescription}
               </p>
+            ) : (
+              <NexusRichText
+                content={currentMod.description || currentMod.summary}
+                className="text-sm leading-7 text-gray-700"
+                fallbackClassName="whitespace-pre-wrap break-words text-sm leading-7 text-gray-700"
+                emptyClassName="text-sm leading-7 text-gray-400"
+              />
+            )}
+            {translatedDescription && currentMod.description && (
+              <div className="mt-4 border-t border-gray-200 pt-4">
+                <NexusRichText
+                  content={currentMod.description}
+                  className="text-xs leading-6 text-gray-500"
+                  fallbackClassName="whitespace-pre-wrap break-words text-xs leading-6 text-gray-500"
+                  emptyText=""
+                />
+              </div>
             )}
             {!currentMod.description && currentMod.summary && (
               <p className="mt-4 border-t border-gray-200 pt-4 text-xs leading-6 text-gray-500">
@@ -366,7 +387,12 @@ export default function NexusModDetail({
                           <span>上传: {formatUnixDateTime(file.uploadedTimestamp)}</span>
                         </div>
                         {file.description && (
-                          <p className="mt-3 text-xs leading-6 text-gray-500">{file.description}</p>
+                          <NexusRichText
+                            content={file.description}
+                            className="mt-3 text-xs leading-6 text-gray-500"
+                            fallbackClassName="mt-3 whitespace-pre-wrap break-words text-xs leading-6 text-gray-500"
+                            emptyText=""
+                          />
                         )}
                         <div className="mt-4 flex justify-end">
                           <button
