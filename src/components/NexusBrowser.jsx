@@ -1,6 +1,8 @@
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
   Globe,
   Languages,
   Loader2,
@@ -20,6 +22,17 @@ import {
   saveNexusTranslationsMap,
 } from './nexusShared';
 
+const UPDATED_PAGED_TAB = 'pagedBrowse';
+const POPULAR_PAGED_TAB = 'popularPagedBrowse';
+const PAGED_DEFAULT_PERIOD = '1m';
+const PAGED_DEFAULT_PAGE_SIZE = 20;
+
+const PAGED_PERIOD_OPTIONS = [
+  { value: '1d', label: '近 1 天' },
+  { value: '1w', label: '近 1 周' },
+  { value: '1m', label: '近 1 月' },
+];
+
 const TAB_CONFIG = {
   trending: {
     label: '热门',
@@ -33,25 +46,62 @@ const TAB_CONFIG = {
     label: '最近更新',
     loader: () => window.api.nexusGetLatestUpdated(),
   },
+  [UPDATED_PAGED_TAB]: {
+    label: '最近更新分页',
+    paged: true,
+    defaultPeriod: '1m',
+    loader: ({ period, page, pageSize, force }) => window.api.nexusGetRecentlyUpdatedPage(
+      period,
+      page,
+      pageSize,
+      force,
+    ),
+  },
+  [POPULAR_PAGED_TAB]: {
+    label: '网页热门',
+    paged: true,
+    defaultPeriod: '1w',
+    loader: ({ period, page, pageSize, force }) => window.api.nexusGetPopularPage(
+      period,
+      page,
+      pageSize,
+      force,
+    ),
+  },
 };
 
 const TRANSLATE_DELAY_MS = 1000;
 
-function createTabState() {
-  return {
+function createTabState(tab) {
+  const baseState = {
     data: [],
     loading: false,
     loaded: false,
     error: '',
+    warning: '',
   };
+
+  if (TAB_CONFIG[tab]?.paged) {
+    return {
+      ...baseState,
+      page: 1,
+      pageSize: PAGED_DEFAULT_PAGE_SIZE,
+      totalItems: 0,
+      totalPages: 0,
+      hasPrev: false,
+      hasNext: false,
+      period: TAB_CONFIG[tab].defaultPeriod || PAGED_DEFAULT_PERIOD,
+    };
+  }
+
+  return baseState;
 }
 
 function createAllTabStates() {
-  return {
-    trending: createTabState(),
-    latestAdded: createTabState(),
-    latestUpdated: createTabState(),
-  };
+  return Object.keys(TAB_CONFIG).reduce((result, tab) => {
+    result[tab] = createTabState(tab);
+    return result;
+  }, {});
 }
 
 function delayWithAbort(ms, abortRef) {
@@ -88,7 +138,8 @@ function needsSummaryTranslation(mod, translationEntry, force = false) {
 
 function NexusModCard({ mod, translationEntry, translating, onClick, onTranslate }) {
   const [imageError, setImageError] = useState(false);
-  const isTranslated = !needsNameTranslation(mod, translationEntry) && !needsSummaryTranslation(mod, translationEntry);
+  const isTranslated = !needsNameTranslation(mod, translationEntry)
+    && !needsSummaryTranslation(mod, translationEntry);
 
   useEffect(() => {
     setImageError(false);
@@ -198,7 +249,9 @@ export default function NexusBrowser({
   const translateAbortRef = useRef(false);
   const deferredSearch = useDeferredValue(search);
   const activeState = tabStates[activeTab];
+  const activeTabConfig = TAB_CONFIG[activeTab];
   const hasApiKey = Boolean(apiKey.trim());
+  const isPagedTab = Boolean(activeTabConfig?.paged);
 
   useEffect(() => {
     translationsRef.current = translations;
@@ -208,10 +261,8 @@ export default function NexusBrowser({
     tabStatesRef.current = tabStates;
   }, [tabStates]);
 
-  useEffect(() => {
-    return () => {
-      translateAbortRef.current = true;
-    };
+  useEffect(() => () => {
+    translateAbortRef.current = true;
   }, []);
 
   useEffect(() => {
@@ -248,7 +299,13 @@ export default function NexusBrowser({
   };
 
   const fetchTab = async (tab, options = {}) => {
-    const { force = false, keyOverride = '' } = options;
+    const {
+      force = false,
+      keyOverride = '',
+      page,
+      pageSize,
+      period,
+    } = options;
     const effectiveKey = keyOverride || apiKey;
 
     if (!effectiveKey) {
@@ -259,24 +316,72 @@ export default function NexusBrowser({
       return;
     }
 
+    const currentState = tabStatesRef.current[tab] || createTabState(tab);
+    const previousStateSnapshot = { ...currentState };
+    const nextPage = TAB_CONFIG[tab].paged ? (page ?? currentState.page ?? 1) : undefined;
+    const nextPageSize = TAB_CONFIG[tab].paged
+      ? (pageSize ?? currentState.pageSize ?? PAGED_DEFAULT_PAGE_SIZE)
+      : undefined;
+    const nextPeriod = TAB_CONFIG[tab].paged
+      ? (period ?? currentState.period ?? TAB_CONFIG[tab].defaultPeriod ?? PAGED_DEFAULT_PERIOD)
+      : undefined;
+
     setTabStates((previous) => ({
       ...previous,
       [tab]: {
         ...previous[tab],
         loading: true,
         error: '',
+        warning: '',
+        ...(TAB_CONFIG[tab].paged
+          ? {
+            page: nextPage,
+            pageSize: nextPageSize,
+            period: nextPeriod,
+          }
+          : {}),
       },
     }));
 
     try {
+      if (TAB_CONFIG[tab].paged) {
+        const result = await TAB_CONFIG[tab].loader({
+          force,
+          page: nextPage,
+          pageSize: nextPageSize,
+          period: nextPeriod,
+        });
+        setTabStates((previous) => ({
+          ...previous,
+          [tab]: {
+            ...previous[tab],
+            data: Array.isArray(result?.items) ? result.items : [],
+            loading: false,
+            loaded: true,
+            error: '',
+            warning: result?.warning || '',
+            page: result?.page || nextPage,
+            pageSize: result?.pageSize || nextPageSize,
+            period: nextPeriod,
+            totalItems: result?.totalItems || 0,
+            totalPages: result?.totalPages || 0,
+            hasPrev: Boolean(result?.hasPrev),
+            hasNext: Boolean(result?.hasNext),
+          },
+        }));
+        return;
+      }
+
       const data = await TAB_CONFIG[tab].loader();
       setTabStates((previous) => ({
         ...previous,
         [tab]: {
+          ...previous[tab],
           data: Array.isArray(data) ? data : [],
           loading: false,
           loaded: true,
           error: '',
+          warning: '',
         },
       }));
     } catch (error) {
@@ -284,9 +389,11 @@ export default function NexusBrowser({
       setTabStates((previous) => ({
         ...previous,
         [tab]: {
-          ...previous[tab],
+          ...(TAB_CONFIG[tab].paged ? previousStateSnapshot : previous[tab]),
           loading: false,
-          loaded: false,
+          loaded: TAB_CONFIG[tab].paged
+            ? previousStateSnapshot.loaded
+            : previous[tab]?.loaded || false,
           error: message,
         },
       }));
@@ -429,7 +536,8 @@ export default function NexusBrowser({
 
     const targets = filteredMods.filter((mod) => {
       const translationEntry = translationsRef.current[getNexusTranslationKey(mod.modId)] || {};
-      return needsNameTranslation(mod, translationEntry) || needsSummaryTranslation(mod, translationEntry);
+      return needsNameTranslation(mod, translationEntry)
+        || needsSummaryTranslation(mod, translationEntry);
     });
 
     if (targets.length === 0) {
@@ -513,9 +621,41 @@ export default function NexusBrowser({
     }
   };
 
+  const handleRefreshCurrentTab = () => {
+    fetchTab(activeTab, { force: true });
+  };
+
+  const handlePagedPeriodChange = (period) => {
+    if (activeState.loading || activeState.period === period) {
+      return;
+    }
+    fetchTab(activeTab, {
+      period,
+      page: 1,
+      force: false,
+    });
+  };
+
+  const handlePagedPageChange = (nextPage) => {
+    if (activeState.loading || nextPage < 1 || nextPage === activeState.page) {
+      return;
+    }
+    fetchTab(activeTab, { page: nextPage, force: false });
+  };
+
   const translatePercent = translateProgress.total > 0
     ? Math.round((translateProgress.done / translateProgress.total) * 100)
     : 0;
+  const pageStart = isPagedTab && activeState.totalItems > 0
+    ? ((activeState.page - 1) * activeState.pageSize) + 1
+    : 0;
+  const pageEnd = isPagedTab && activeState.totalItems > 0
+    ? Math.min(activeState.totalItems, activeState.page * activeState.pageSize)
+    : 0;
+  const pagedTitle = activeTab === POPULAR_PAGED_TAB ? '网页热门' : '最近更新分页';
+  const pagedDescription = activeTab === POPULAR_PAGED_TAB
+    ? `基于 Nexus 网页端热门列表的 GraphQL 分页加载。当前时间范围内共有 ${formatCompactNumber(activeState.totalItems || 0)} 个 Mod。`
+    : `基于 Nexus 最近更新列表分页加载详情。当前时间范围内共有 ${formatCompactNumber(activeState.totalItems || 0)} 个 Mod。`;
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -525,7 +665,7 @@ export default function NexusBrowser({
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Nexus 浏览</h1>
               <p className="mt-1 text-sm text-gray-500">
-                浏览 Slay the Spire 2 在 Nexus Mods 上的热门、新增和最近更新内容。
+                浏览 Slay the Spire 2 在 Nexus Mods 上的热门、新增、最近更新，以及网页热门分页内容。
               </p>
             </div>
             {nexusSupported && (
@@ -533,7 +673,7 @@ export default function NexusBrowser({
                 {hasApiKey && (
                   <button
                     type="button"
-                    onClick={() => fetchTab(activeTab, { force: true })}
+                    onClick={handleRefreshCurrentTab}
                     className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
                   >
                     <RefreshCw size={16} className={activeState.loading ? 'animate-spin' : ''} />
@@ -576,7 +716,7 @@ export default function NexusBrowser({
               </div>
               <h2 className="mt-5 text-xl font-semibold text-gray-900">配置 Nexus Mods API Key 以浏览在线 Mod</h2>
               <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-gray-500">
-                这个页面的列表与详情都通过 Rust 后端代理请求 Nexus Mods V1 API。先完成 API Key 验证并保存，然后即可浏览热门、最新和最近更新的模组。
+                这个页面的列表与详情通过 Rust 后端请求 Nexus Mods 官方 API 与网页列表接口。先完成 API Key 验证并保存，然后即可浏览热门、最新、最近更新以及分页内容。
               </p>
               <div className="mt-6 flex justify-center">
                 <button
@@ -609,7 +749,7 @@ export default function NexusBrowser({
                   ))}
                 </div>
 
-                <div className="relative min-w-[260px] flex-1 max-w-md">
+                <div className="relative min-w-[260px] max-w-md flex-1">
                   <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
@@ -630,6 +770,69 @@ export default function NexusBrowser({
                   {translating ? '翻译中...' : '全部翻译'}
                 </button>
               </div>
+
+              {!isPagedTab && (
+                <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4 text-sm text-blue-900 shadow-sm">
+                  当前标签使用 Nexus 官方单页列表接口，每次只会返回固定 10 条。需要查看更多内容时，请切换到“最近更新分页”或“网页热门”。
+                </div>
+              )}
+
+              {isPagedTab && (
+                <div className="mb-4 rounded-2xl border border-gray-100 bg-white px-4 py-4 shadow-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{pagedTitle}</p>
+                      <p className="mt-1 text-xs leading-5 text-gray-500">{pagedDescription}</p>
+                    </div>
+
+                    <div className="flex rounded-xl bg-gray-100 p-1">
+                      {PAGED_PERIOD_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          disabled={activeState.loading}
+                          onClick={() => handlePagedPeriodChange(option.value)}
+                          className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                            activeState.period === option.value
+                              ? 'bg-white text-gray-900 shadow-sm'
+                              : 'text-gray-500 hover:text-gray-700'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4">
+                    <p className="text-xs text-gray-500">
+                      {activeState.totalItems > 0
+                        ? `第 ${activeState.page}/${activeState.totalPages} 页 · 显示 ${pageStart}-${pageEnd} / ${activeState.totalItems}`
+                        : '当前时间范围暂无可展示条目。'}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={!activeState.hasPrev || activeState.loading}
+                        onClick={() => handlePagedPageChange(activeState.page - 1)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <ChevronLeft size={16} />
+                        上一页
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!activeState.hasNext || activeState.loading}
+                        onClick={() => handlePagedPageChange(activeState.page + 1)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        下一页
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {(translating || translateProgress.total > 0) && (
                 <div className="mb-4 rounded-2xl border border-gray-100 bg-white px-4 py-4 shadow-sm">
@@ -655,6 +858,15 @@ export default function NexusBrowser({
                       className="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
                       style={{ width: `${translatePercent}%` }}
                     />
+                  </div>
+                </div>
+              )}
+
+              {activeState.warning && (
+                <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
+                    <span>{activeState.warning}</span>
                   </div>
                 </div>
               )}
