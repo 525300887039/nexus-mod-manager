@@ -49,7 +49,12 @@ fn read_log_safe(path: &Path) -> String {
 pub fn logs_get_latest() -> LogsResult {
     let logs_dir = match get_logs_dir() {
         Some(d) => d,
-        None => return LogsResult { files: vec![], content: String::new() },
+        None => {
+            return LogsResult {
+                files: vec![],
+                content: String::new(),
+            }
+        }
     };
 
     let mut files: Vec<(String, u64)> = Vec::new();
@@ -70,7 +75,11 @@ pub fn logs_get_latest() -> LogsResult {
         }
     }
     files.sort_by(|a, b| b.1.cmp(&a.1));
-    let file_names: Vec<String> = files.into_iter().take(MAX_LOG_FILES).map(|(n, _)| n).collect();
+    let file_names: Vec<String> = files
+        .into_iter()
+        .take(MAX_LOG_FILES)
+        .map(|(n, _)| n)
+        .collect();
 
     let content = if !file_names.is_empty() {
         read_log_safe(&logs_dir.join(&file_names[0]))
