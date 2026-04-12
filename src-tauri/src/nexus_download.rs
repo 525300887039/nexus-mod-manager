@@ -1,4 +1,7 @@
-use crate::{mods::smart_extract_zip, AppState};
+use crate::{
+    mods::{is_supported_archive_path, smart_extract_archive},
+    AppState,
+};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,13 +50,8 @@ fn emit_download_state(
 }
 
 fn extract_file_name(path: &Path) -> Option<String> {
-    path.file_name().map(|name| name.to_string_lossy().to_string())
-}
-
-fn is_zip_archive(path: &Path) -> bool {
-    path.extension()
-        .map(|value| value.to_string_lossy().eq_ignore_ascii_case("zip"))
-        .unwrap_or(false)
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
 }
 
 fn decode_file_name_from_url(url: &tauri::webview::Url) -> String {
@@ -65,7 +63,7 @@ fn decode_file_name_from_url(url: &tauri::webview::Url) -> String {
                 .map(|decoded| decoded.into_owned())
                 .unwrap_or_else(|_| segment.to_string())
         })
-        .unwrap_or_else(|| "mod.zip".to_string())
+        .unwrap_or_else(|| "mod-download".to_string())
 }
 
 fn make_unique_destination(download_dir: &Path, file_name: &str) -> PathBuf {
@@ -107,9 +105,7 @@ pub async fn nexus_open_download_page(
     file_id: Option<u64>,
 ) -> Result<(), String> {
     let url = if let Some(file_id) = file_id {
-        format!(
-            "https://www.nexusmods.com/slaythespire2/mods/{mod_id}?tab=files&file_id={file_id}"
-        )
+        format!("https://www.nexusmods.com/slaythespire2/mods/{mod_id}?tab=files&file_id={file_id}")
     } else {
         format!("https://www.nexusmods.com/slaythespire2/mods/{mod_id}?tab=files")
     };
@@ -182,8 +178,7 @@ pub async fn nexus_open_download_page(
                             &message,
                             Some(file_name.clone()),
                         );
-                        let _ =
-                            app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
+                        let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
                         return true;
                     }
                 };
@@ -195,17 +190,12 @@ pub async fn nexus_open_download_page(
                     return true;
                 }
 
-                if !is_zip_archive(&archive_path) {
+                if !is_supported_archive_path(&archive_path) {
                     let message = format!(
-                        "{} 已下载到临时目录，但不是 ZIP 文件，请手动解压或安装",
+                        "{} 已下载到临时目录，但不是支持自动安装的归档文件",
                         file_name
                     );
-                    emit_download_state(
-                        &app_handle,
-                        "success",
-                        &message,
-                        Some(file_name.clone()),
-                    );
+                    emit_download_state(&app_handle, "success", &message, Some(file_name.clone()));
                     let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, DOWNLOAD_SAVED_EVENT, message);
                     return true;
                 }
@@ -226,42 +216,28 @@ pub async fn nexus_open_download_page(
                             &message,
                             Some(file_name.clone()),
                         );
-                        let _ =
-                            app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
+                        let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
                         return true;
                     }
                 };
                 let Some(game_path) = game_path else {
                     let message = "尚未设置游戏目录，无法自动安装".to_string();
-                    emit_download_state(
-                        &app_handle,
-                        "error",
-                        &message,
-                        Some(file_name.clone()),
-                    );
+                    emit_download_state(&app_handle, "error", &message, Some(file_name.clone()));
                     let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
                     return true;
                 };
 
                 let mods_dir = Path::new(&game_path).join("mods");
                 if let Err(error) = fs::create_dir_all(&mods_dir) {
-                    let message = format!(
-                        "无法创建 Mod 安装目录 {}: {}",
-                        mods_dir.display(),
-                        error
-                    );
-                    emit_download_state(
-                        &app_handle,
-                        "error",
-                        &message,
-                        Some(file_name.clone()),
-                    );
+                    let message =
+                        format!("无法创建 Mod 安装目录 {}: {}", mods_dir.display(), error);
+                    emit_download_state(&app_handle, "error", &message, Some(file_name.clone()));
                     let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
                     return true;
                 }
 
                 let archive_path_str = archive_path.to_string_lossy().to_string();
-                match smart_extract_zip(&archive_path_str, &mods_dir) {
+                match smart_extract_archive(&archive_path_str, &mods_dir) {
                     Ok(_) => {
                         emit_download_state(
                             &app_handle,

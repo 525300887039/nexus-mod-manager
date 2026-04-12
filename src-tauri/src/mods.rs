@@ -1,8 +1,10 @@
 use crate::AppState;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri_plugin_dialog::DialogExt;
 
 const DISABLED_DIR: &str = "mods_disabled";
@@ -48,6 +50,13 @@ pub struct ModResult {
     pub error: Option<String>,
     pub mods: Option<Vec<ModInfo>>,
     pub installed: Option<Vec<String>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArchiveFormat {
+    Zip,
+    Rar,
+    SevenZip,
 }
 
 fn get_mods_dir(game_path: &str) -> PathBuf {
@@ -145,8 +154,14 @@ fn try_parse_mod(full_path: &Path, item_name: &str, enabled: bool) -> Option<Mod
                     return Some(ModInfo {
                         id: data.get("id").and_then(|v| v.as_str()).map(String::from),
                         name: data.get("name").and_then(|v| v.as_str()).map(String::from),
-                        author: data.get("author").and_then(|v| v.as_str()).map(String::from),
-                        version: data.get("version").and_then(|v| v.as_str()).map(String::from),
+                        author: data
+                            .get("author")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        version: data
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
                         nexus_id: parse_optional_u64(data.get("nexus_id")),
                         description: data
                             .get("description")
@@ -159,9 +174,7 @@ fn try_parse_mod(full_path: &Path, item_name: &str, enabled: bool) -> Option<Mod
                                     .collect()
                             })
                         }),
-                        affects_gameplay: data
-                            .get("affects_gameplay")
-                            .and_then(|v| v.as_bool()),
+                        affects_gameplay: data.get("affects_gameplay").and_then(|v| v.as_bool()),
                         has_dll: Some(has_dll),
                         has_pck: Some(has_pck),
                         enabled,
@@ -207,8 +220,14 @@ fn try_parse_mod(full_path: &Path, item_name: &str, enabled: bool) -> Option<Mod
                 return Some(ModInfo {
                     id: data.get("id").and_then(|v| v.as_str()).map(String::from),
                     name: data.get("name").and_then(|v| v.as_str()).map(String::from),
-                    author: data.get("author").and_then(|v| v.as_str()).map(String::from),
-                    version: data.get("version").and_then(|v| v.as_str()).map(String::from),
+                    author: data
+                        .get("author")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    version: data
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     nexus_id: parse_optional_u64(data.get("nexus_id")),
                     description: data
                         .get("description")
@@ -329,10 +348,7 @@ pub fn mods_scan(state: tauri::State<'_, AppState>) -> Vec<ModInfo> {
 }
 
 #[tauri::command]
-pub fn mods_toggle(
-    state: tauri::State<'_, AppState>,
-    mod_info: ToggleModInfo,
-) -> ModResult {
+pub fn mods_toggle(state: tauri::State<'_, AppState>, mod_info: ToggleModInfo) -> ModResult {
     let gp = state.game_path.lock().unwrap();
     let game_path = match &*gp {
         Some(p) => p.clone(),
@@ -410,10 +426,7 @@ pub fn mods_toggle(
 }
 
 #[tauri::command]
-pub fn mods_uninstall(
-    state: tauri::State<'_, AppState>,
-    mod_info: ToggleModInfo,
-) -> ModResult {
+pub fn mods_uninstall(state: tauri::State<'_, AppState>, mod_info: ToggleModInfo) -> ModResult {
     let gp = state.game_path.lock().unwrap();
     let game_path = match &*gp {
         Some(p) => p.clone(),
@@ -459,143 +472,470 @@ pub fn mods_uninstall(
     }
 }
 
-pub(crate) fn smart_extract_zip(zip_path: &str, mods_dir: &Path) -> Result<(), String> {
-    let ext = Path::new(zip_path)
+fn detect_archive_format_from_extension(path: &Path) -> Option<ArchiveFormat> {
+    let ext = path
         .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    if ext != "zip" {
-        return Err(format!(
-            "不支持的格式: .{}\n\n目前仅支持 .zip 格式的压缩包。\n如果是 .rar / .7z 请先解压后拖入文件夹，或转换为 .zip 格式。",
-            ext
-        ));
+        .map(|value| value.to_string_lossy().to_lowercase())?;
+    match ext.as_str() {
+        "zip" => Some(ArchiveFormat::Zip),
+        "rar" => Some(ArchiveFormat::Rar),
+        "7z" => Some(ArchiveFormat::SevenZip),
+        _ => None,
     }
+}
 
-    let file = fs::File::open(zip_path).map_err(|e| format!(
-        "无法读取压缩包: {}\n\n该文件可能已损坏或不是有效的 ZIP 格式。\n\nMOD 压缩包应为 .zip 格式，内含:\n  • ModName.json (MOD 描述文件)\n  • ModName.dll (代码类 MOD)\n  • ModName.pck (资源类 MOD)",
-        e
-    ))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!(
-        "无法读取压缩包: {}\n\n该文件可能已损坏或不是有效的 ZIP 格式。",
-        e
-    ))?;
+fn detect_archive_format(path: &Path) -> Option<ArchiveFormat> {
+    detect_archive_format_from_extension(path)
+}
 
-    if archive.len() == 0 {
-        return Err(format!("压缩包为空: {}", Path::new(zip_path).file_name().unwrap_or_default().to_string_lossy()));
+pub(crate) fn is_supported_archive_path(path: &Path) -> bool {
+    detect_archive_format(path).is_some()
+}
+
+fn archive_format_label(format: ArchiveFormat) -> &'static str {
+    match format {
+        ArchiveFormat::Zip => "ZIP",
+        ArchiveFormat::Rar => "RAR",
+        ArchiveFormat::SevenZip => "7Z",
     }
+}
 
-    // ── Smart search: find MOD manifest JSON files inside the ZIP ──
-    let mut mod_roots: Vec<(String, String)> = Vec::new(); // (mod_dir, folder_name)
-    let mut flat_mod = false;
-    for i in 0..archive.len() {
-        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        if entry.is_dir() { continue; }
-        let name = entry.name().replace('\\', "/");
-        if !name.ends_with(".json") { continue; }
-        let mut buf = Vec::new();
-        let mut reader = entry;
-        std::io::Read::read_to_end(&mut reader, &mut buf).map_err(|e| e.to_string())?;
-        if let Ok(text) = String::from_utf8(buf) {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
-                if val.get("id").is_some() && val.get("name").is_some() {
-                    let parts: Vec<&str> = name.split('/').collect();
-                    if parts.len() >= 2 {
-                        let mod_dir = parts[..parts.len()-1].join("/");
-                        let folder_name = parts[parts.len()-2].to_string();
-                        mod_roots.push((mod_dir, folder_name));
-                    } else {
-                        flat_mod = true;
-                    }
-                }
-            }
+fn unsupported_archive_message(path: &Path) -> String {
+    let ext = path
+        .extension()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "未知".to_string());
+    format!(
+        "不支持的格式: .{}\n\n目前支持 .zip / .rar / .7z 格式的压缩包。",
+        ext
+    )
+}
+
+fn archive_base_name(path: &Path) -> String {
+    path.file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unknown_mod".to_string())
+}
+
+fn unique_work_dir(prefix: &str, base_dir: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(base_dir)
+        .map_err(|e| format!("无法创建临时目录 {}: {}", base_dir.display(), e))?;
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = std::process::id();
+
+    for attempt in 0..32 {
+        let candidate = base_dir.join(format!("{prefix}-{pid}-{now}-{attempt}"));
+        if !candidate.exists() {
+            fs::create_dir_all(&candidate)
+                .map_err(|e| format!("无法创建临时目录 {}: {}", candidate.display(), e))?;
+            return Ok(candidate);
         }
     }
 
-    if !mod_roots.is_empty() || flat_mod {
-        // Re-open for extraction
-        let file2 = fs::File::open(zip_path).map_err(|e| e.to_string())?;
-        let mut archive2 = zip::ZipArchive::new(file2).map_err(|e| e.to_string())?;
+    Err("无法创建唯一临时目录，请稍后重试".to_string())
+}
 
-        for (mod_dir, folder_name) in &mod_roots {
-            let dest_dir = mods_dir.join(folder_name);
-            let _ = fs::create_dir_all(&dest_dir);
-            let prefix = format!("{}/", mod_dir);
-            for i in 0..archive2.len() {
-                let mut entry = archive2.by_index(i).map_err(|e| e.to_string())?;
-                let ep = entry.name().replace('\\', "/");
-                if !ep.starts_with(&prefix) { continue; }
-                let rel = &ep[prefix.len()..];
-                if rel.is_empty() { continue; }
-                let out_path = dest_dir.join(rel);
-                if entry.is_dir() {
-                    let _ = fs::create_dir_all(&out_path);
-                } else {
-                    if let Some(parent) = out_path.parent() {
-                        let _ = fs::create_dir_all(parent);
-                    }
-                    let mut outfile = fs::File::create(&out_path).map_err(|e| e.to_string())?;
-                    std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
-                }
+struct TempDirGuard {
+    path: PathBuf,
+}
+
+impl TempDirGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn sanitize_archive_path(raw: &str) -> Option<PathBuf> {
+    let normalized = raw.replace('\\', "/");
+    let mut cleaned = PathBuf::new();
+
+    for component in Path::new(&normalized).components() {
+        match component {
+            std::path::Component::Normal(part) => cleaned.push(part),
+            std::path::Component::CurDir => {}
+            std::path::Component::Prefix(_)
+            | std::path::Component::RootDir
+            | std::path::Component::ParentDir => return None,
+        }
+    }
+
+    if cleaned.as_os_str().is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    if path.is_dir() {
+        fs::remove_dir_all(path).map_err(|e| format!("无法删除目录 {}: {}", path.display(), e))
+    } else {
+        fs::remove_file(path).map_err(|e| format!("无法删除文件 {}: {}", path.display(), e))
+    }
+}
+
+fn copy_file_to_path(src: &Path, dest: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("无法创建目录 {}: {}", parent.display(), e))?;
+    }
+    fs::copy(src, dest).map_err(|e| {
+        format!(
+            "复制文件失败 {} -> {}: {}",
+            src.display(),
+            dest.display(),
+            e
+        )
+    })?;
+    Ok(())
+}
+
+fn copy_children_to_dir(src: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| format!("无法创建目录 {}: {}", dest.display(), e))?;
+    for entry in fs::read_dir(src).map_err(|e| format!("无法读取目录 {}: {}", src.display(), e))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else {
+            copy_file_to_path(&src_path, &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_root_files_to_dir(src: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| format!("无法创建目录 {}: {}", dest.display(), e))?;
+    for entry in fs::read_dir(src).map_err(|e| format!("无法读取目录 {}: {}", src.display(), e))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src_path = entry.path();
+        if src_path.is_file() {
+            let dest_path = dest.join(entry.file_name());
+            copy_file_to_path(&src_path, &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn dir_has_entries(path: &Path) -> Result<bool, String> {
+    Ok(fs::read_dir(path)
+        .map_err(|e| format!("无法读取目录 {}: {}", path.display(), e))?
+        .next()
+        .is_some())
+}
+
+fn is_mod_manifest_file(path: &Path) -> bool {
+    read_json_file(path)
+        .map(|value| value.get("id").is_some() && value.get("name").is_some())
+        .unwrap_or(false)
+}
+
+fn collect_manifest_roots(root: &Path) -> Result<(Vec<PathBuf>, bool), String> {
+    fn visit(
+        current: &Path,
+        root: &Path,
+        mod_roots: &mut HashSet<PathBuf>,
+        flat_mod: &mut bool,
+    ) -> Result<(), String> {
+        for entry in fs::read_dir(current)
+            .map_err(|e| format!("无法读取目录 {}: {}", current.display(), e))?
+        {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, root, mod_roots, flat_mod)?;
+                continue;
             }
+
+            let is_json = path
+                .extension()
+                .map(|value| value.to_string_lossy().eq_ignore_ascii_case("json"))
+                .unwrap_or(false);
+            if !is_json || !is_mod_manifest_file(&path) {
+                continue;
+            }
+
+            let parent = path.parent().unwrap_or(root);
+            if parent == root {
+                *flat_mod = true;
+            } else {
+                let relative = parent
+                    .strip_prefix(root)
+                    .map_err(|e| format!("计算目录相对路径失败: {}", e))?;
+                mod_roots.insert(relative.to_path_buf());
+            }
+        }
+        Ok(())
+    }
+
+    let mut mod_roots = HashSet::new();
+    let mut flat_mod = false;
+    visit(root, root, &mut mod_roots, &mut flat_mod)?;
+
+    let mut mod_roots = mod_roots.into_iter().collect::<Vec<_>>();
+    mod_roots.sort();
+    Ok((mod_roots, flat_mod))
+}
+
+fn prepare_archive_install_tree(
+    extracted_root: &Path,
+    prepared_root: &Path,
+    archive_path: &Path,
+) -> Result<(), String> {
+    let (mod_roots, flat_mod) = collect_manifest_roots(extracted_root)?;
+
+    if !mod_roots.is_empty() || flat_mod {
+        for mod_root in &mod_roots {
+            let src_dir = extracted_root.join(mod_root);
+            let folder_name = mod_root
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown_mod".to_string());
+            let dest_dir = prepared_root.join(folder_name);
+            copy_dir_recursive(&src_dir, &dest_dir)?;
         }
 
         if flat_mod && mod_roots.is_empty() {
-            for i in 0..archive2.len() {
-                let mut entry = archive2.by_index(i).map_err(|e| e.to_string())?;
-                let ep = entry.name().replace('\\', "/");
-                if ep.contains('/') || entry.is_dir() { continue; }
-                let out_path = mods_dir.join(&ep);
-                let mut outfile = fs::File::create(&out_path).map_err(|e| e.to_string())?;
-                std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
-            }
+            copy_root_files_to_dir(extracted_root, prepared_root)?;
         }
         return Ok(());
     }
 
-    // ── Fallback: no manifest found, use legacy extraction ──
-    let mut top_dirs = std::collections::HashSet::new();
+    let mut top_dirs = HashSet::new();
     let mut has_root_file = false;
-    for i in 0..archive.len() {
-        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = entry.mangled_name();
-        let parts: Vec<_> = name.components().collect();
-        if parts.len() == 1 && !entry.is_dir() {
+    for entry in fs::read_dir(extracted_root)
+        .map_err(|e| format!("无法读取目录 {}: {}", extracted_root.display(), e))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            top_dirs.insert(entry.file_name().to_string_lossy().to_string());
+        } else {
             has_root_file = true;
-            break;
-        }
-        if let Some(first) = parts.first() {
-            top_dirs.insert(first.as_os_str().to_string_lossy().to_string());
         }
     }
 
-    let dest = if !has_root_file && top_dirs.len() == 1 {
-        mods_dir.to_path_buf()
+    if !has_root_file && top_dirs.len() == 1 {
+        copy_children_to_dir(extracted_root, prepared_root)?;
     } else {
-        let base_name = Path::new(zip_path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown_mod".to_string());
-        let sub_dir = mods_dir.join(&base_name);
-        let _ = fs::create_dir_all(&sub_dir);
-        sub_dir
-    };
+        let dest_dir = prepared_root.join(archive_base_name(archive_path));
+        copy_children_to_dir(extracted_root, &dest_dir)?;
+    }
 
-    let file2 = fs::File::open(zip_path).map_err(|e| e.to_string())?;
-    let mut archive2 = zip::ZipArchive::new(file2).map_err(|e| e.to_string())?;
-    for i in 0..archive2.len() {
-        let mut entry = archive2.by_index(i).map_err(|e| e.to_string())?;
-        let out_path = dest.join(entry.mangled_name());
+    Ok(())
+}
+
+fn promote_prepared_tree(prepared_root: &Path, mods_dir: &Path) -> Result<(), String> {
+    let entries = fs::read_dir(prepared_root)
+        .map_err(|e| format!("无法读取临时安装目录 {}: {}", prepared_root.display(), e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+
+    if entries.is_empty() {
+        return Err("压缩包中没有可安装的内容。".to_string());
+    }
+
+    for entry in entries {
+        let src_path = entry.path();
+        let dest_path = mods_dir.join(entry.file_name());
+        remove_path_if_exists(&dest_path)?;
+        fs::rename(&src_path, &dest_path)
+            .map_err(|e| format!("无法安装到 {}: {}", dest_path.display(), e))?;
+    }
+
+    Ok(())
+}
+
+fn extract_zip_to_dir(zip_path: &Path, dest_dir: &Path) -> Result<(), String> {
+    let file = fs::File::open(zip_path).map_err(|e| {
+        format!(
+            "无法读取 ZIP 压缩包: {}\n\n该文件可能已损坏或不是有效的 ZIP 格式。",
+            e
+        )
+    })?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+        format!(
+            "无法读取 ZIP 压缩包: {}\n\n该文件可能已损坏或不是有效的 ZIP 格式。",
+            e
+        )
+    })?;
+
+    if archive.len() == 0 {
+        return Err(format!(
+            "压缩包为空: {}",
+            zip_path.file_name().unwrap_or_default().to_string_lossy()
+        ));
+    }
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let raw_name = entry.name().replace('\\', "/");
+        let relative = sanitize_archive_path(&raw_name)
+            .ok_or_else(|| format!("ZIP 压缩包包含不安全路径: {}", raw_name))?;
+        let out_path = dest_dir.join(relative);
+
         if entry.is_dir() {
-            let _ = fs::create_dir_all(&out_path);
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("无法创建目录 {}: {}", out_path.display(), e))?;
+            continue;
+        }
+
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("无法创建目录 {}: {}", parent.display(), e))?;
+        }
+        let mut outfile = fs::File::create(&out_path)
+            .map_err(|e| format!("无法创建文件 {}: {}", out_path.display(), e))?;
+        std::io::copy(&mut entry, &mut outfile)
+            .map_err(|e| format!("无法写入文件 {}: {}", out_path.display(), e))?;
+    }
+
+    Ok(())
+}
+
+fn extract_rar_to_dir(rar_path: &Path, dest_dir: &Path) -> Result<(), String> {
+    let mut archive = unrar::Archive::new(rar_path)
+        .as_first_part()
+        .open_for_processing()
+        .map_err(|e| format!("无法读取 RAR 压缩包: {}", e))?;
+    let mut extracted_any = false;
+
+    while let Some(header) = archive
+        .read_header()
+        .map_err(|e| format!("读取 RAR 条目失败: {}", e))?
+    {
+        let raw_name = header.entry().filename.to_string_lossy().to_string();
+        let relative = sanitize_archive_path(&raw_name)
+            .ok_or_else(|| format!("RAR 压缩包包含不安全路径: {}", raw_name))?;
+        let out_path = dest_dir.join(relative);
+
+        if header.entry().is_directory() {
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("无法创建目录 {}: {}", out_path.display(), e))?;
+            archive = header
+                .skip()
+                .map_err(|e| format!("跳过 RAR 目录失败: {}", e))?;
         } else {
             if let Some(parent) = out_path.parent() {
-                let _ = fs::create_dir_all(parent);
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("无法创建目录 {}: {}", parent.display(), e))?;
             }
-            let mut outfile = fs::File::create(&out_path).map_err(|e| e.to_string())?;
-            std::io::copy(&mut entry, &mut outfile).map_err(|e| e.to_string())?;
+            archive = header
+                .extract_to(&out_path)
+                .map_err(|e| format!("解压 RAR 文件失败 {}: {}", out_path.display(), e))?;
         }
+
+        extracted_any = true;
     }
+
+    if !extracted_any {
+        return Err(format!(
+            "压缩包为空: {}",
+            rar_path.file_name().unwrap_or_default().to_string_lossy()
+        ));
+    }
+
     Ok(())
+}
+
+fn extract_7z_to_dir(sevenz_path: &Path, dest_dir: &Path) -> Result<(), String> {
+    let mut extracted_any = false;
+    sevenz_rust::decompress_file_with_extract_fn(sevenz_path, dest_dir, |entry, reader, _| {
+        let raw_name = entry.name().replace('\\', "/");
+        let relative = sanitize_archive_path(&raw_name).ok_or_else(|| {
+            sevenz_rust::Error::other(format!("7Z 压缩包包含不安全路径: {}", raw_name))
+        })?;
+        let out_path = dest_dir.join(relative);
+
+        if entry.is_directory() {
+            fs::create_dir_all(&out_path).map_err(sevenz_rust::Error::from)?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).map_err(sevenz_rust::Error::from)?;
+            }
+            let mut outfile = fs::File::create(&out_path).map_err(sevenz_rust::Error::from)?;
+            std::io::copy(reader, &mut outfile).map_err(sevenz_rust::Error::from)?;
+        }
+
+        extracted_any = true;
+        Ok(true)
+    })
+    .map_err(|e| format!("无法读取 7Z 压缩包: {}", e))?;
+
+    if !extracted_any {
+        return Err(format!(
+            "压缩包为空: {}",
+            sevenz_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ));
+    }
+
+    Ok(())
+}
+
+fn extract_archive_to_dir(
+    archive_path: &Path,
+    dest_dir: &Path,
+    format: ArchiveFormat,
+) -> Result<(), String> {
+    match format {
+        ArchiveFormat::Zip => extract_zip_to_dir(archive_path, dest_dir),
+        ArchiveFormat::Rar => extract_rar_to_dir(archive_path, dest_dir),
+        ArchiveFormat::SevenZip => extract_7z_to_dir(archive_path, dest_dir),
+    }
+}
+
+pub(crate) fn smart_extract_archive(archive_path: &str, mods_dir: &Path) -> Result<(), String> {
+    let archive_path = Path::new(archive_path);
+    let Some(format) = detect_archive_format(archive_path) else {
+        return Err(unsupported_archive_message(archive_path));
+    };
+
+    fs::create_dir_all(mods_dir)
+        .map_err(|e| format!("无法创建 Mod 安装目录 {}: {}", mods_dir.display(), e))?;
+
+    let extraction_temp =
+        TempDirGuard::new(unique_work_dir("sts2-mod-extract", &std::env::temp_dir())?);
+    extract_archive_to_dir(archive_path, extraction_temp.path(), format)
+        .map_err(|error| format!("{} 解压失败: {}", archive_format_label(format), error))?;
+
+    if !dir_has_entries(extraction_temp.path())? {
+        return Err("压缩包中没有可提取的内容。".to_string());
+    }
+
+    let prepared_root = TempDirGuard::new(unique_work_dir("sts2-mod-install", mods_dir)?);
+    prepare_archive_install_tree(extraction_temp.path(), prepared_root.path(), archive_path)?;
+
+    if !dir_has_entries(prepared_root.path())? {
+        return Err("压缩包中没有可安装的内容。".to_string());
+    }
+
+    promote_prepared_tree(prepared_root.path(), mods_dir)
 }
 
 fn install_folder(folder_path: &str, mods_dir: &Path) -> Result<(), String> {
@@ -603,7 +943,8 @@ fn install_folder(folder_path: &str, mods_dir: &Path) -> Result<(), String> {
     if !src.is_dir() {
         return Err(format!("不是有效的文件夹: {}", folder_path));
     }
-    let folder_name = src.file_name()
+    let folder_name = src
+        .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown_mod".to_string());
     let dest = mods_dir.join(&folder_name);
@@ -648,7 +989,7 @@ pub async fn mods_install(
     let files = dialog
         .file()
         .set_title("Select MOD Archive")
-        .add_filter("Archives", &["zip"])
+        .add_filter("Archives", &["zip", "rar", "7z"])
         .blocking_pick_files();
 
     let file_paths = match files {
@@ -670,7 +1011,7 @@ pub async fn mods_install(
         let result = if p.is_dir() {
             install_folder(&path_str, &mods_dir)
         } else {
-            smart_extract_zip(&path_str, &mods_dir)
+            smart_extract_archive(&path_str, &mods_dir)
         };
         if let Err(e) = result {
             return Ok(ModResult {
@@ -696,10 +1037,7 @@ pub async fn mods_install(
 }
 
 #[tauri::command]
-pub fn mods_install_drop(
-    state: tauri::State<'_, AppState>,
-    file_paths: Vec<String>,
-) -> ModResult {
+pub fn mods_install_drop(state: tauri::State<'_, AppState>, file_paths: Vec<String>) -> ModResult {
     let gp = state.game_path.lock().unwrap().clone();
     let game_path = match gp {
         Some(p) => p,
@@ -721,7 +1059,7 @@ pub fn mods_install_drop(
         let result = if p.is_dir() {
             install_folder(fp, &mods_dir)
         } else {
-            smart_extract_zip(fp, &mods_dir)
+            smart_extract_archive(fp, &mods_dir)
         };
         if let Err(e) = result {
             return ModResult {
@@ -808,10 +1146,7 @@ pub async fn mods_backup(
 
     let mods_dir = get_mods_dir(&game_path);
     let dialog = app.dialog();
-    let default_name = format!(
-        "sts2_mods_backup_{}.zip",
-        chrono_timestamp()
-    );
+    let default_name = format!("sts2_mods_backup_{}.zip", chrono_timestamp());
 
     let save_path = dialog
         .file()
@@ -876,7 +1211,7 @@ pub async fn mods_restore(
     match file {
         Some(path) => {
             let path_str = path.to_string();
-            if let Err(e) = smart_extract_zip(&path_str, &mods_dir) {
+            if let Err(e) = smart_extract_archive(&path_str, &mods_dir) {
                 return Ok(ModResult {
                     success: false,
                     error: Some(e),
@@ -906,4 +1241,113 @@ fn chrono_timestamp() -> String {
         .unwrap_or_default()
         .as_millis();
     now.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn make_temp_dir(label: &str) -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "sts2-mod-manager-test-{label}-{}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+            id
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_file(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn sanitize_archive_path_rejects_unsafe_components() {
+        assert_eq!(
+            sanitize_archive_path("mods\\Example\\file.dll"),
+            Some(PathBuf::from("mods").join("Example").join("file.dll"))
+        );
+        assert_eq!(sanitize_archive_path("../evil.dll"), None);
+        assert_eq!(sanitize_archive_path("/absolute/path.dll"), None);
+        assert_eq!(sanitize_archive_path("C:/evil.dll"), None);
+    }
+
+    #[test]
+    fn prepare_archive_install_tree_prefers_manifest_roots() {
+        let extracted = make_temp_dir("manifest-src");
+        let prepared = make_temp_dir("manifest-dest");
+
+        write_file(
+            &extracted
+                .join("nested")
+                .join("ExampleMod")
+                .join("ExampleMod.json"),
+            r#"{"id":"example","name":"Example Mod"}"#,
+        );
+        write_file(
+            &extracted
+                .join("nested")
+                .join("ExampleMod")
+                .join("ExampleMod.dll"),
+            "binary",
+        );
+
+        prepare_archive_install_tree(&extracted, &prepared, Path::new("ExampleMod.rar")).unwrap();
+
+        assert!(prepared.join("ExampleMod").join("ExampleMod.json").exists());
+        assert!(prepared.join("ExampleMod").join("ExampleMod.dll").exists());
+
+        let _ = fs::remove_dir_all(&extracted);
+        let _ = fs::remove_dir_all(&prepared);
+    }
+
+    #[test]
+    fn prepare_archive_install_tree_keeps_single_top_level_folder() {
+        let extracted = make_temp_dir("single-root-src");
+        let prepared = make_temp_dir("single-root-dest");
+
+        write_file(
+            &extracted.join("PackRoot").join("data").join("readme.txt"),
+            "hello",
+        );
+
+        prepare_archive_install_tree(&extracted, &prepared, Path::new("pack.7z")).unwrap();
+
+        assert!(prepared
+            .join("PackRoot")
+            .join("data")
+            .join("readme.txt")
+            .exists());
+
+        let _ = fs::remove_dir_all(&extracted);
+        let _ = fs::remove_dir_all(&prepared);
+    }
+
+    #[test]
+    fn prepare_archive_install_tree_wraps_mixed_root_entries() {
+        let extracted = make_temp_dir("mixed-root-src");
+        let prepared = make_temp_dir("mixed-root-dest");
+
+        write_file(&extracted.join("Example.json"), r#"{"foo":"bar"}"#);
+        write_file(&extracted.join("Example.dll"), "binary");
+
+        prepare_archive_install_tree(&extracted, &prepared, Path::new("MixedArchive.zip")).unwrap();
+
+        assert!(prepared.join("MixedArchive").join("Example.json").exists());
+        assert!(prepared.join("MixedArchive").join("Example.dll").exists());
+
+        let _ = fs::remove_dir_all(&extracted);
+        let _ = fs::remove_dir_all(&prepared);
+    }
 }
