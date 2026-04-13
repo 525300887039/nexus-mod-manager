@@ -10,7 +10,7 @@ import {
 import NexusSettings from './NexusSettings';
 import TranslateSettings from './TranslateSettings';
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const TABS = [
   { id: 'nexus', label: 'Nexus Mods', icon: Globe },
   { id: 'translate', label: '翻译设置', icon: Languages },
