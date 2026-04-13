@@ -1,14 +1,16 @@
 <div align="center">
 
-# 🃏 STS2 Mod Manager
+# STS2 Mod Manager
 
-**给杀戮尖塔 2 玩家的 MOD 管理工具**
+给《杀戮尖塔 2》玩家的本地 MOD 管理与 Nexus 工作流工具。
 
-不用再手动复制文件夹了。装、删、开、关，拖进来就完事。
+基于 [ImogeneOctaviap794/sts2-mod-manager](https://github.com/ImogeneOctaviap794/sts2-mod-manager) Fork 开发，当前维护仓库为 [525300887039/sts2-mod-manager](https://github.com/525300887039/sts2-mod-manager)。
 
-[![Release](https://img.shields.io/github/v/release/ImogeneOctaviap794/sts2-mod-manager?style=flat-square&color=7c3aed)](https://github.com/ImogeneOctaviap794/sts2-mod-manager/releases)
-[![Stars](https://img.shields.io/github/stars/ImogeneOctaviap794/sts2-mod-manager?style=flat-square&color=f59e0b)](https://github.com/ImogeneOctaviap794/sts2-mod-manager)
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/525300887039/sts2-mod-manager?style=flat-square&color=2563eb)](https://github.com/525300887039/sts2-mod-manager/releases)
+[![Stars](https://img.shields.io/github/stars/525300887039/sts2-mod-manager?style=flat-square&color=f59e0b)](https://github.com/525300887039/sts2-mod-manager)
+[![License](https://img.shields.io/badge/license-MIT-2563eb?style=flat-square)](LICENSE)
+![Version](https://img.shields.io/badge/version-2.0.0-111827?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0f172a?style=flat-square)
 
 <br>
 
@@ -20,88 +22,70 @@
 
 </div>
 
-<br>
+## 当前状态
 
----
+- 这个 fork 延续了原项目的本地 MOD 管理能力，并继续补齐 Nexus 浏览、下载和翻译整合体验。
+- 当前仓库代码已经包含 Nexus 分页浏览、Nexus 链接直达 Mod 详情、`file_id` 保留与跳转修复、下载页打开优化，以及压缩包自动安装兼容增强等迭代。
+- 截图目前主要展示本地 MOD 管理与存档页面，Nexus 浏览和设置页能力已经集成到当前代码中。
 
-<br>
+## 功能概览
 
-## ✨ 亮点
+- 本地 MOD 管理：扫描、安装、卸载、启用、禁用，支持拖拽安装，支持依赖提示、风险标识、排序与双视图切换。
+- 压缩包安装：支持 `ZIP`、`RAR`、`7Z` 压缩包自动解包安装；Nexus 下载完成后会优先尝试自动安装支持的归档文件。
+- Nexus 工作流：支持热门、最新、最近更新、分页热门、分页最近更新列表，支持查看详情、文件列表、作者信息、评分和下载量。
+- Nexus 链接直达：支持直接粘贴 `nexusmods.com/slaythespire2/mods/...` 链接打开对应 Mod，能够识别并保留 `file_id`。
+- 翻译系统：支持 MyMemory 和 OpenAI 兼容大模型接口，支持双引擎 fallback、SQLite 缓存、Nexus 文本翻译与富文本清洗。
+- 存档与诊断：支持普通存档与 MOD 存档导入导出、自动备份、日志查看，以及崩溃日志分析。
+- 设置与配置：支持 Nexus API Key 验证与保存、翻译缓存管理、项目关于页，以及 MOD 配置档案保存和切换。
 
-| | 功能 | 说明 |
-|---|---|---|
-| 📦 | **MOD 管理** | 安装 / 卸载 / 启用 / 禁用，支持拖拽 `.zip` `.rar` 直接安装 |
-| �️ | **风险信号** | 自动标出缺失依赖、区分框架前置 / 玩法改动 / 资源类 MOD，一眼看清能不能安全启用 |
-| 🔗 | **依赖跳转** | 详情面板中点击依赖项直接跳转到对应 MOD |
-| 🔀 | **智能排序** | 按名称 / 依赖问题优先 / 影响玩法 / 分类 / 大小排序 |
-| 🖼️ | **双视图模式** | 卡片网格视图（默认）和双栏列表视图随时切换 |
-| 🧭 | **首次引导** | 3 步卡片式引导流程：选目录 → 装 MOD → 启动验证，新手友好 |
-| ⚠️ | **操作确认** | 卸载、批量卸载、应用配置、还原备份等风险操作弹出确认，说明后果再执行 |
-| �💾 | **存档管理** | 普通存档 & MOD 存档分开展示，一键导出备份、导入还原 |
-| 📋 | **游戏日志** | 实时查看最新日志，出问题秒定位 |
-| 🔍 | **崩溃分析** | 游戏退出后自动扫日志，精确到哪个 MOD 炸了 |
-| 🌐 | **MOD 翻译** | 英文描述看不懂？一键翻译成中文 |
-| ⚙️ | **配置档案** | 保存 MOD 启用方案，联机 / 单机随时切换 |
-| 🚀 | **启动游戏** | Steam 正版、非 Steam 版都支持，自动识别 |
+## 下载与使用
 
-<br>
+- 最新发布页：<https://github.com/525300887039/sts2-mod-manager/releases>
+- 当前主发布链路以 `Tauri v2 + NSIS` 为准，面向 `Windows 10 / Windows 11`。
+- 只使用本地 MOD 管理时，不需要额外配置。
+- 使用 Nexus 浏览、详情、下载功能前，需要在应用设置页填写并验证自己的 Nexus Mods API Key。
+- 某些 Nexus 文件会自动下载安装；如果文件类型不支持自动安装，程序会保留手动安装入口并给出提示。
 
-## 📥 下载
-
-👉 [**点这里下载最新版**](https://github.com/ImogeneOctaviap794/sts2-mod-manager/releases)
-
-> 安装包约 4MB，内置 WebView2 引导。Win10 / Win11 直接运行。
-
-<br>
-
-## 🚀 上手
-
-1. 双击打开，管理器会自动找到你的游戏
-2. 找不到？左下角点一下手动选目录，只需选一次
-3. 装 MOD — 点「安装 MOD」选文件，或者**直接拖进窗口**
-4. 开玩
-
-<br>
-
-## 🛠 本地开发
+## 本地开发
 
 ```bash
-npm install              # 装依赖
-npm run tauri:dev        # Tauri 开发模式
-npm run tauri:build      # Tauri 打包
-npm run dev              # Electron 开发模式
+npm install
+
+npm run dev          # Electron 开发模式
+npm run build        # Electron 前端打包
+
+npm run tauri:dev    # Tauri 开发模式
+npm run tauri:build  # Tauri NSIS 打包
 ```
 
-> Tauri 打包需要 [Rust](https://rustup.rs/) + [VS Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（勾选 C++ 桌面开发）
+### 开发环境
 
-<br>
+- Node.js 与 npm
+- Rust toolchain
+- Windows C++ 构建环境，例如 Visual Studio Build Tools
 
-## 📐 技术栈
+## 技术栈
 
-```
-前端    React 18 + TailwindCSS + Lucide Icons
-后端    Rust (Tauri v2)
-打包    NSIS 安装包 (~4MB)
-备选    Electron 版本代码也保留着
-```
-
-<br>
-
-## 📁 项目结构
-
-```
-src/              前端源码 (React)
-src-tauri/        后端源码 (Rust)
-dist-tauri/       前端构建产物
-main.js           Electron 主进程
-preload.js        Electron 预加载
-docs/             截图素材
+```text
+Frontend  React 18 + Tailwind CSS + Lucide React
+Desktop   Tauri v2（主发布链路）+ Electron（兼容/开发链路保留）
+Backend   Rust + Tauri Commands
+Storage   SQLite（翻译缓存 / Nexus 缓存）+ 本地配置文件
 ```
 
-<br>
+## 项目结构
 
----
+```text
+src/            React 前端源码
+src-tauri/      Tauri / Rust 后端源码与打包配置
+dist/           Electron 渲染进程构建产物
+dist-tauri/     Tauri 前端构建产物
+main.js         Electron 主进程入口
+preload.js      Electron 预加载脚本
+docs/           README 截图素材
+```
 
-<div align="center">
-<sub>MIT License · 给个 ⭐ 就是最大的支持</sub>
-</div>
+## 仓库关系
+
+- `origin`: <https://github.com/525300887039/sts2-mod-manager>
+- `upstream`: <https://github.com/ImogeneOctaviap794/sts2-mod-manager>
