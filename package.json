@@ -2,6 +2,7 @@
   "name": "sts2-mod-manager",
   "version": "2.0.0",
   "description": "Slay the Spire 2 MOD Manager",
+  "license": "MIT",
   "main": "main.js",
   "scripts": {
     "start": "set ELECTRON_RUN_AS_NODE=&& electron .",
