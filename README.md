@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/525300887039/sts2-mod-manager?style=flat-square&color=2563eb)](https://github.com/525300887039/sts2-mod-manager/releases)
 [![Stars](https://img.shields.io/github/stars/525300887039/sts2-mod-manager?style=flat-square&color=f59e0b)](https://github.com/525300887039/sts2-mod-manager)
 [![License](https://img.shields.io/badge/license-MIT-2563eb?style=flat-square)](LICENSE)
-![Version](https://img.shields.io/badge/version-2.0.0-111827?style=flat-square)
+![Version](https://img.shields.io/badge/version-2.1.0-111827?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0f172a?style=flat-square)
 
 <br>
