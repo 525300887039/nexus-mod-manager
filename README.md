@@ -1,20 +1,18 @@
 <div align="center">
 
-# STS2 Mod Manager
+# Nexus Mod Manager
 
-给《杀戮尖塔 2》玩家的本地 MOD 管理与 Nexus 工作流工具。
+跨游戏的 Nexus Mods 管理器，支持浏览、下载、安装和管理 Mod。
 
-基于 [ImogeneOctaviap794/sts2-mod-manager](https://github.com/ImogeneOctaviap794/sts2-mod-manager) Fork 开发，当前维护仓库为 [525300887039/sts2-mod-manager](https://github.com/525300887039/sts2-mod-manager)。
-
-[![Release](https://img.shields.io/github/v/release/525300887039/sts2-mod-manager?style=flat-square&color=2563eb)](https://github.com/525300887039/sts2-mod-manager/releases)
-[![Stars](https://img.shields.io/github/stars/525300887039/sts2-mod-manager?style=flat-square&color=f59e0b)](https://github.com/525300887039/sts2-mod-manager)
+[![Release](https://img.shields.io/github/v/release/525300887039/nexus-mod-manager?style=flat-square&color=2563eb)](https://github.com/525300887039/nexus-mod-manager/releases)
+[![Stars](https://img.shields.io/github/stars/525300887039/nexus-mod-manager?style=flat-square&color=f59e0b)](https://github.com/525300887039/nexus-mod-manager)
 [![License](https://img.shields.io/badge/license-MIT-2563eb?style=flat-square)](LICENSE)
-![Version](https://img.shields.io/badge/version-2.1.0-111827?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.0.0-111827?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0f172a?style=flat-square)
 
 <br>
 
-<img src="docs/preview-mods.png" width="90%" alt="MOD 管理界面" />
+<img src="docs/preview-mods.png" width="90%" alt="Mod 管理界面" />
 
 <br><br>
 
@@ -22,43 +20,35 @@
 
 </div>
 
-## 当前状态
+## 功能
 
-- 这个 fork 延续了原项目的本地 MOD 管理能力，并继续补齐 Nexus 浏览、下载和翻译整合体验。
-- 当前仓库代码已经包含 Nexus 分页浏览、Nexus 链接直达 Mod 详情、`file_id` 保留与跳转修复、下载页打开优化，以及压缩包自动安装兼容增强等迭代。
-- 截图目前主要展示本地 MOD 管理与存档页面，Nexus 浏览和设置页能力已经集成到当前代码中。
+- 支持任意 Nexus Mods 游戏，当前配置会按游戏隔离。
+- 内置热门游戏预设：STS2、Skyrim Special Edition、Baldur's Gate 3、Stardew Valley、Cyberpunk 2077、Monster Hunter: World、Fallout 4、The Witcher 3、Elden Ring、Starfield。
+- 提供 Nexus Mods 热门、最新、最近更新浏览，以及 Mod 详情、文件列表和下载入口。
+- 支持 ZIP / RAR / 7Z 一键安装、拖拽安装、启用/禁用切换、卸载、备份与恢复。
+- 内置翻译工作流，支持本地缓存、免费翻译接口和 OpenAI 兼容模型配置。
+- 支持多游戏快速切换，切换后会刷新当前游戏的 Mod 列表、缓存和配置档案。
 
-## 功能概览
+## 针对特定游戏的增强功能
 
-- 本地 MOD 管理：扫描、安装、卸载、启用、禁用，支持拖拽安装，支持依赖提示、风险标识、排序与双视图切换。
-- 压缩包安装：支持 `ZIP`、`RAR`、`7Z` 压缩包自动解包安装；Nexus 下载完成后会优先尝试自动安装支持的归档文件。
-- Nexus 工作流：支持热门、最新、最近更新、分页热门、分页最近更新列表，支持查看详情、文件列表、作者信息、评分和下载量。
-- Nexus 链接直达：支持直接粘贴 `nexusmods.com/slaythespire2/mods/...` 链接打开对应 Mod，能够识别并保留 `file_id`。
-- 翻译系统：支持 MyMemory 和 OpenAI 兼容大模型接口，支持双引擎 fallback、SQLite 缓存、Nexus 文本翻译与富文本清洗。
-- 存档与诊断：支持普通存档与 MOD 存档导入导出、自动备份、日志查看，以及崩溃日志分析。
-- 设置与配置：支持 Nexus API Key 验证与保存、翻译缓存管理、项目关于页，以及 MOD 配置档案保存和切换。
+- Slay the Spire 2：存档管理、游戏日志查看、崩溃分析、自动路径探测。
+- 其他游戏：默认提供通用 Nexus 浏览、下载、安装和 Mod 管理能力。
 
-## 下载与使用
+## 安装
 
-- 最新发布页：<https://github.com/525300887039/sts2-mod-manager/releases>
-- 当前主发布链路以 `Tauri v2 + NSIS` 为准，面向 `Windows 10 / Windows 11`。
-- 只使用本地 MOD 管理时，不需要额外配置。
-- 使用 Nexus 浏览、详情、下载功能前，需要在应用设置页填写并验证自己的 Nexus Mods API Key。
-- 某些 Nexus 文件会自动下载安装；如果文件类型不支持自动安装，程序会保留手动安装入口并给出提示。
+- 发布页：<https://github.com/525300887039/nexus-mod-manager/releases>
+- 首次启动时选择当前要管理的游戏；如果未自动识别路径，可以手动指定游戏目录。
+- 使用 Nexus 浏览、详情和下载功能前，需要在设置页填写并验证自己的 Nexus Mods API Key。
 
-## 本地开发
+## 构建
 
 ```bash
 npm install
-
-npm run dev          # Electron 开发模式
-npm run build        # Electron 前端打包
-
-npm run tauri:dev    # Tauri 开发模式
-npm run tauri:build  # Tauri NSIS 打包
+npm run tauri:dev
+npm run tauri:build
 ```
 
-### 开发环境
+## 开发环境
 
 - Node.js 与 npm
 - Rust toolchain
@@ -68,9 +58,9 @@ npm run tauri:build  # Tauri NSIS 打包
 
 ```text
 Frontend  React 18 + Tailwind CSS + Lucide React
-Desktop   Tauri v2（主发布链路）+ Electron（兼容/开发链路保留）
+Desktop   Tauri v2
 Backend   Rust + Tauri Commands
-Storage   SQLite（翻译缓存 / Nexus 缓存）+ 本地配置文件
+Storage   SQLite + 本地 JSON 配置
 ```
 
 ## 项目结构
@@ -78,14 +68,11 @@ Storage   SQLite（翻译缓存 / Nexus 缓存）+ 本地配置文件
 ```text
 src/            React 前端源码
 src-tauri/      Tauri / Rust 后端源码与打包配置
-dist/           Electron 渲染进程构建产物
 dist-tauri/     Tauri 前端构建产物
-main.js         Electron 主进程入口
-preload.js      Electron 预加载脚本
 docs/           README 截图素材
 ```
 
-## 仓库关系
+## 仓库
 
-- `origin`: <https://github.com/525300887039/sts2-mod-manager>
-- `upstream`: <https://github.com/ImogeneOctaviap794/sts2-mod-manager>
+- `origin`: <https://github.com/525300887039/nexus-mod-manager>
+- `upstream`: <https://github.com/ImogeneOctaviap794/nexus-mod-manager>
