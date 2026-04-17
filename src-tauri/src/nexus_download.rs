@@ -35,6 +35,18 @@ fn current_game_path(app: &AppHandle) -> Result<Option<String>, String> {
         .map_err(|e| format!("游戏路径状态锁已损坏: {}", e))
 }
 
+fn current_game_domain(app: &AppHandle) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let domain = state
+        .current_profile
+        .lock()
+        .map_err(|e| format!("game profile state lock poisoned: {}", e))?
+        .as_ref()
+        .map(|profile| profile.nexus_domain.clone())
+        .ok_or_else(|| "please select a game first".to_string())?;
+    Ok(domain)
+}
+
 fn emit_download_state(
     app: &AppHandle,
     phase: &'static str,
@@ -104,10 +116,11 @@ pub async fn nexus_open_download_page(
     mod_id: u64,
     file_id: Option<u64>,
 ) -> Result<(), String> {
+    let game_domain = current_game_domain(&app)?;
     let url = if let Some(file_id) = file_id {
-        format!("https://www.nexusmods.com/slaythespire2/mods/{mod_id}?tab=files&file_id={file_id}")
+        format!("https://www.nexusmods.com/{game_domain}/mods/{mod_id}?tab=files&file_id={file_id}")
     } else {
-        format!("https://www.nexusmods.com/slaythespire2/mods/{mod_id}?tab=files")
+        format!("https://www.nexusmods.com/{game_domain}/mods/{mod_id}?tab=files")
     };
 
     let app_handle = app.clone();
@@ -135,7 +148,7 @@ pub async fn nexus_open_download_page(
     .on_download(move |_webview, event| {
         match event {
             DownloadEvent::Requested { url, destination } => {
-                let download_dir = std::env::temp_dir().join("sts2-mod-downloads");
+                let download_dir = std::env::temp_dir().join("nexus-mod-downloads");
                 if let Err(error) = fs::create_dir_all(&download_dir) {
                     let message = format!("无法创建临时下载目录: {}", error);
                     emit_download_state(&app_handle, "error", &message, None);

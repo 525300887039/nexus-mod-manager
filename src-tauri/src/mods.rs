@@ -1,4 +1,4 @@
-use crate::AppState;
+use crate::{config, AppState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -59,8 +59,32 @@ enum ArchiveFormat {
     SevenZip,
 }
 
-fn get_mods_dir(game_path: &str) -> PathBuf {
-    Path::new(game_path).join("mods")
+fn normalized_mods_subdir(mods_subdir: Option<&str>) -> &str {
+    mods_subdir
+        .map(str::trim)
+        .filter(|mods_subdir| !mods_subdir.is_empty())
+        .unwrap_or("mods")
+}
+
+fn current_mods_subdir_from_state(state: &tauri::State<'_, AppState>) -> String {
+    state
+        .current_profile
+        .lock()
+        .ok()
+        .and_then(|profile| profile.as_ref().map(|profile| profile.mods_subdir.clone()))
+        .filter(|mods_subdir| !mods_subdir.trim().is_empty())
+        .unwrap_or_else(|| "mods".to_string())
+}
+
+fn current_mods_subdir_from_config() -> String {
+    config::load_current_profile()
+        .map(|profile| profile.mods_subdir)
+        .filter(|mods_subdir| !mods_subdir.trim().is_empty())
+        .unwrap_or_else(|| "mods".to_string())
+}
+
+fn get_mods_dir(game_path: &str, mods_subdir: &str) -> PathBuf {
+    Path::new(game_path).join(normalized_mods_subdir(Some(mods_subdir)))
 }
 
 fn get_disabled_dir(game_path: &str) -> PathBuf {
@@ -71,12 +95,12 @@ fn get_disabled_dir(game_path: &str) -> PathBuf {
     dir
 }
 
-fn get_legacy_disabled_dir(game_path: &str) -> PathBuf {
-    get_mods_dir(game_path).join(LEGACY_DISABLED_DIR)
+fn get_legacy_disabled_dir(mods_dir: &Path) -> PathBuf {
+    mods_dir.join(LEGACY_DISABLED_DIR)
 }
 
-fn migrate_legacy_disabled(game_path: &str) {
-    let legacy = get_legacy_disabled_dir(game_path);
+fn migrate_legacy_disabled(game_path: &str, mods_dir: &Path) {
+    let legacy = get_legacy_disabled_dir(mods_dir);
     let disabled = get_disabled_dir(game_path);
     if !legacy.exists() {
         return;
@@ -257,13 +281,13 @@ fn try_parse_mod(full_path: &Path, item_name: &str, enabled: bool) -> Option<Mod
     None
 }
 
-pub fn scan_mods_internal(game_path: &str) -> Vec<ModInfo> {
-    let mods_dir = get_mods_dir(game_path);
+fn scan_mods_internal_with_subdir(game_path: &str, mods_subdir: &str) -> Vec<ModInfo> {
+    let mods_dir = get_mods_dir(game_path, mods_subdir);
     if !mods_dir.exists() {
         return vec![];
     }
 
-    migrate_legacy_disabled(game_path);
+    migrate_legacy_disabled(game_path, &mods_dir);
     let mut mods = Vec::new();
 
     // Scan enabled mods
@@ -309,11 +333,20 @@ pub fn scan_mods_internal(game_path: &str) -> Vec<ModInfo> {
     mods
 }
 
-fn find_folder_mod_location(game_path: &str, folder_name: &str) -> Option<PathBuf> {
+pub fn scan_mods_internal(game_path: &str) -> Vec<ModInfo> {
+    let mods_subdir = current_mods_subdir_from_config();
+    scan_mods_internal_with_subdir(game_path, &mods_subdir)
+}
+
+fn find_folder_mod_location(
+    game_path: &str,
+    mods_dir: &Path,
+    folder_name: &str,
+) -> Option<PathBuf> {
     let roots = vec![
-        get_mods_dir(game_path),
+        mods_dir.to_path_buf(),
         get_disabled_dir(game_path),
-        get_legacy_disabled_dir(game_path),
+        get_legacy_disabled_dir(mods_dir),
     ];
     for root in roots {
         let candidate = root.join(folder_name);
@@ -324,11 +357,11 @@ fn find_folder_mod_location(game_path: &str, folder_name: &str) -> Option<PathBu
     None
 }
 
-fn find_flat_mod_base_dir(game_path: &str, files: &[String]) -> Option<PathBuf> {
+fn find_flat_mod_base_dir(game_path: &str, mods_dir: &Path, files: &[String]) -> Option<PathBuf> {
     let roots = vec![
-        get_mods_dir(game_path),
+        mods_dir.to_path_buf(),
         get_disabled_dir(game_path),
-        get_legacy_disabled_dir(game_path),
+        get_legacy_disabled_dir(mods_dir),
     ];
     for root in roots {
         if files.iter().any(|f| root.join(f).exists()) {
@@ -341,8 +374,9 @@ fn find_flat_mod_base_dir(game_path: &str, files: &[String]) -> Option<PathBuf> 
 #[tauri::command]
 pub fn mods_scan(state: tauri::State<'_, AppState>) -> Vec<ModInfo> {
     let gp = state.game_path.lock().unwrap();
+    let mods_subdir = current_mods_subdir_from_state(&state);
     match &*gp {
-        Some(p) => scan_mods_internal(p),
+        Some(p) => scan_mods_internal_with_subdir(p, &mods_subdir),
         None => vec![],
     }
 }
@@ -363,11 +397,12 @@ pub fn mods_toggle(state: tauri::State<'_, AppState>, mod_info: ToggleModInfo) -
     };
     drop(gp);
 
-    let mods_dir = get_mods_dir(&game_path);
+    let mods_subdir = current_mods_subdir_from_state(&state);
+    let mods_dir = get_mods_dir(&game_path, &mods_subdir);
     let disabled_dir = get_disabled_dir(&game_path);
 
     if mod_info.is_folder {
-        if let Some(src) = find_folder_mod_location(&game_path, &mod_info.folder_name) {
+        if let Some(src) = find_folder_mod_location(&game_path, &mods_dir, &mod_info.folder_name) {
             let src_parent = src.parent().unwrap_or(Path::new(""));
             let dst = if src_parent == mods_dir.as_path() {
                 disabled_dir.join(&mod_info.folder_name)
@@ -394,7 +429,7 @@ pub fn mods_toggle(state: tauri::State<'_, AppState>, mod_info: ToggleModInfo) -
         }
     } else {
         let files = mod_info.files.unwrap_or_default();
-        if let Some(src_dir) = find_flat_mod_base_dir(&game_path, &files) {
+        if let Some(src_dir) = find_flat_mod_base_dir(&game_path, &mods_dir, &files) {
             let dst_dir = if src_dir == mods_dir {
                 &disabled_dir
             } else {
@@ -420,7 +455,7 @@ pub fn mods_toggle(state: tauri::State<'_, AppState>, mod_info: ToggleModInfo) -
     ModResult {
         success: true,
         error: None,
-        mods: Some(scan_mods_internal(&game_path)),
+        mods: Some(scan_mods_internal_with_subdir(&game_path, &mods_subdir)),
         installed: None,
     }
 }
@@ -441,8 +476,13 @@ pub fn mods_uninstall(state: tauri::State<'_, AppState>, mod_info: ToggleModInfo
     };
     drop(gp);
 
+    let mods_subdir = current_mods_subdir_from_state(&state);
+    let mods_dir = get_mods_dir(&game_path, &mods_subdir);
+
     if mod_info.is_folder {
-        if let Some(mod_path) = find_folder_mod_location(&game_path, &mod_info.folder_name) {
+        if let Some(mod_path) =
+            find_folder_mod_location(&game_path, &mods_dir, &mod_info.folder_name)
+        {
             if let Err(e) = fs::remove_dir_all(&mod_path) {
                 return ModResult {
                     success: false,
@@ -454,7 +494,7 @@ pub fn mods_uninstall(state: tauri::State<'_, AppState>, mod_info: ToggleModInfo
         }
     } else {
         let files = mod_info.files.unwrap_or_default();
-        if let Some(base_dir) = find_flat_mod_base_dir(&game_path, &files) {
+        if let Some(base_dir) = find_flat_mod_base_dir(&game_path, &mods_dir, &files) {
             for file in &files {
                 let fp = base_dir.join(file);
                 if fp.exists() {
@@ -467,7 +507,7 @@ pub fn mods_uninstall(state: tauri::State<'_, AppState>, mod_info: ToggleModInfo
     ModResult {
         success: true,
         error: None,
-        mods: Some(scan_mods_internal(&game_path)),
+        mods: Some(scan_mods_internal_with_subdir(&game_path, &mods_subdir)),
         installed: None,
     }
 }
@@ -985,7 +1025,7 @@ pub(crate) fn smart_extract_archive(archive_path: &str, mods_dir: &Path) -> Resu
         .map_err(|e| format!("无法创建 Mod 安装目录 {}: {}", mods_dir.display(), e))?;
 
     let extraction_temp =
-        TempDirGuard::new(unique_work_dir("sts2-mod-extract", &std::env::temp_dir())?);
+        TempDirGuard::new(unique_work_dir("nexus-mod-extract", &std::env::temp_dir())?);
     extract_archive_to_dir(archive_path, extraction_temp.path(), format)
         .map_err(|error| format!("{} 解压失败: {}", archive_format_label(format), error))?;
 
@@ -993,7 +1033,7 @@ pub(crate) fn smart_extract_archive(archive_path: &str, mods_dir: &Path) -> Resu
         return Err("压缩包中没有可提取的内容。".to_string());
     }
 
-    let prepared_root = TempDirGuard::new(unique_work_dir("sts2-mod-install", mods_dir)?);
+    let prepared_root = TempDirGuard::new(unique_work_dir("nexus-mod-install", mods_dir)?);
     prepare_archive_install_tree(extraction_temp.path(), prepared_root.path(), archive_path)?;
 
     if !dir_has_entries(prepared_root.path())? {
@@ -1049,7 +1089,8 @@ pub async fn mods_install(
         }
     };
 
-    let mods_dir = get_mods_dir(&game_path);
+    let mods_subdir = current_mods_subdir_from_state(&state);
+    let mods_dir = get_mods_dir(&game_path, &mods_subdir);
     let dialog = app.dialog();
     let files = dialog
         .file()
@@ -1096,7 +1137,7 @@ pub async fn mods_install(
     Ok(ModResult {
         success: true,
         error: None,
-        mods: Some(scan_mods_internal(&game_path)),
+        mods: Some(scan_mods_internal_with_subdir(&game_path, &mods_subdir)),
         installed: Some(installed),
     })
 }
@@ -1116,7 +1157,8 @@ pub fn mods_install_drop(state: tauri::State<'_, AppState>, file_paths: Vec<Stri
         }
     };
 
-    let mods_dir = get_mods_dir(&game_path);
+    let mods_subdir = current_mods_subdir_from_state(&state);
+    let mods_dir = get_mods_dir(&game_path, &mods_subdir);
     let mut installed = Vec::new();
 
     for fp in &file_paths {
@@ -1144,7 +1186,7 @@ pub fn mods_install_drop(state: tauri::State<'_, AppState>, file_paths: Vec<Stri
     ModResult {
         success: true,
         error: None,
-        mods: Some(scan_mods_internal(&game_path)),
+        mods: Some(scan_mods_internal_with_subdir(&game_path, &mods_subdir)),
         installed: Some(installed),
     }
 }
@@ -1209,9 +1251,10 @@ pub async fn mods_backup(
         }
     };
 
-    let mods_dir = get_mods_dir(&game_path);
+    let mods_subdir = current_mods_subdir_from_state(&state);
+    let mods_dir = get_mods_dir(&game_path, &mods_subdir);
     let dialog = app.dialog();
-    let default_name = format!("sts2_mods_backup_{}.zip", chrono_timestamp());
+    let default_name = format!("mods_backup_{}.zip", chrono_timestamp());
 
     let save_path = dialog
         .file()
@@ -1265,7 +1308,8 @@ pub async fn mods_restore(
         }
     };
 
-    let mods_dir = get_mods_dir(&game_path);
+    let mods_subdir = current_mods_subdir_from_state(&state);
+    let mods_dir = get_mods_dir(&game_path, &mods_subdir);
     let dialog = app.dialog();
     let file = dialog
         .file()
@@ -1287,7 +1331,7 @@ pub async fn mods_restore(
             Ok(ModResult {
                 success: true,
                 error: None,
-                mods: Some(scan_mods_internal(&game_path)),
+                mods: Some(scan_mods_internal_with_subdir(&game_path, &mods_subdir)),
                 installed: None,
             })
         }
@@ -1318,7 +1362,7 @@ mod tests {
     fn make_temp_dir(label: &str) -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "sts2-mod-manager-test-{label}-{}-{}-{}",
+            "nexus-mod-manager-test-{label}-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1346,6 +1390,18 @@ mod tests {
         assert_eq!(sanitize_archive_path("../evil.dll"), None);
         assert_eq!(sanitize_archive_path("/absolute/path.dll"), None);
         assert_eq!(sanitize_archive_path("C:/evil.dll"), None);
+    }
+
+    #[test]
+    fn get_mods_dir_uses_configured_subdir() {
+        assert_eq!(
+            get_mods_dir(r"D:\Games\Example", "Data"),
+            Path::new(r"D:\Games\Example").join("Data")
+        );
+        assert_eq!(
+            get_mods_dir(r"D:\Games\Example", r"archive\pc\mod"),
+            Path::new(r"D:\Games\Example").join(r"archive\pc\mod")
+        );
     }
 
     #[test]

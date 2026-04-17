@@ -1,3 +1,4 @@
+use crate::app_paths;
 use crate::translate::TranslateResult;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -35,13 +36,28 @@ impl Default for LlmConfig {
     }
 }
 
+#[allow(unreachable_code)]
 fn config_dir() -> Result<PathBuf, String> {
+    return Ok(app_paths::writable_config_dir());
+
     let base = dirs::config_dir().ok_or_else(|| "无法解析配置目录".to_string())?;
-    Ok(base.join("STS2ModManager"))
+    Ok(base.join("NexusModManager"))
 }
 
+#[allow(unreachable_code)]
 fn config_path() -> Result<PathBuf, String> {
+    return Ok(app_paths::current_config_file("llm_config.json"));
+
     Ok(config_dir()?.join("llm_config.json"))
+}
+
+fn load_config_path() -> Option<PathBuf> {
+    let current = app_paths::current_config_file("llm_config.json");
+    if current.exists() {
+        return Some(current);
+    }
+
+    app_paths::existing_config_file("llm_config.json")
 }
 
 fn normalize_engine_mode(engine_mode: &str, enabled: bool) -> String {
@@ -95,21 +111,22 @@ fn ensure_llm_ready(config: &LlmConfig) -> Result<(), String> {
 }
 
 pub fn load_config() -> LlmConfig {
-    let Ok(path) = config_path() else {
+    let Some(path) = load_config_path() else {
         return LlmConfig::default();
     };
-
-    if !path.exists() {
-        return LlmConfig::default();
-    }
 
     let parsed = fs::read_to_string(&path)
         .ok()
         .and_then(|content| serde_json::from_str::<LlmConfig>(&content).ok());
-
-    parsed
+    let config = parsed
         .map(sanitize_for_runtime)
-        .unwrap_or_else(LlmConfig::default)
+        .unwrap_or_else(LlmConfig::default);
+
+    if path != app_paths::current_config_file("llm_config.json") {
+        let _ = save_config(&config);
+    }
+
+    config
 }
 
 pub fn save_config(config: &LlmConfig) -> Result<(), String> {

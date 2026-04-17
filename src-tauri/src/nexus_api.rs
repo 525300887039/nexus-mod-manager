@@ -7,8 +7,7 @@ use tauri::State;
 
 const NEXUS_API_BASE: &str = "https://api.nexusmods.com/v1";
 const NEXUS_GRAPHQL_URL: &str = "https://api-router.nexusmods.com/graphql";
-const GAME_DOMAIN: &str = "slaythespire2";
-const USER_AGENT: &str = "STS2ModManager/2.0";
+const USER_AGENT: &str = "NexusModManager/3.0";
 const NEXUS_API_TIMEOUT_SECS: u64 = 20;
 const DEFAULT_RECENTLY_UPDATED_PERIOD: &str = "1m";
 const DEFAULT_POPULAR_PERIOD: &str = "1w";
@@ -237,6 +236,16 @@ fn get_saved_api_key() -> Result<String, String> {
         .ok_or_else(|| "请先配置 Nexus Mods API Key".to_string())
 }
 
+fn current_game_domain(state: &State<AppState>) -> Result<String, String> {
+    state
+        .current_profile
+        .lock()
+        .map_err(|e| format!("game profile lock poisoned: {}", e))?
+        .as_ref()
+        .map(|profile| profile.nexus_domain.clone())
+        .ok_or_else(|| "please select a game first".to_string())
+}
+
 fn format_nexus_error(status: reqwest::StatusCode, body: &str) -> String {
     let body = body.trim();
 
@@ -341,40 +350,53 @@ fn updated_after_filter_value(period: &str) -> Result<String, String> {
 
 fn cache_nexus_mods_in_memory(
     state: &State<'_, AppState>,
+    game_domain: &str,
     mods: &[NexusModInfo],
 ) -> Result<(), String> {
     let mut cache = state
         .nexus_mod_cache
         .lock()
         .map_err(|e| format!("Nexus 缓存锁已损坏: {}", e))?;
+    let domain_cache = cache
+        .entry(game_domain.to_string())
+        .or_insert_with(HashMap::new);
 
     for mod_info in mods {
-        cache.insert(mod_info.mod_id, mod_info.clone());
+        domain_cache.insert(mod_info.mod_id, mod_info.clone());
     }
 
     Ok(())
 }
 
-fn cache_nexus_mods(state: &State<'_, AppState>, mods: &[NexusModInfo]) -> Result<(), String> {
-    cache_nexus_mods_in_memory(state, mods)?;
+fn cache_nexus_mods(
+    state: &State<'_, AppState>,
+    game_domain: &str,
+    mods: &[NexusModInfo],
+) -> Result<(), String> {
+    cache_nexus_mods_in_memory(state, game_domain, mods)?;
 
     let db = state
         .db
         .lock()
         .map_err(|e| format!("数据库锁已损坏: {}", e))?;
-    db::nexus_mod_cache_upsert_db(&db, mods)?;
+    db::nexus_mod_cache_upsert_db(&db, game_domain, mods)?;
 
     Ok(())
 }
 
-fn read_cached_nexus_mods(state: &State<'_, AppState>) -> Result<Vec<NexusModInfo>, String> {
+fn read_cached_nexus_mods(
+    state: &State<'_, AppState>,
+    game_domain: &str,
+) -> Result<Vec<NexusModInfo>, String> {
     {
         let cache = state
             .nexus_mod_cache
             .lock()
             .map_err(|e| format!("Nexus 缓存锁已损坏: {}", e))?;
-        if !cache.is_empty() {
-            return Ok(cache.values().cloned().collect());
+        if let Some(domain_cache) = cache.get(game_domain) {
+            if !domain_cache.is_empty() {
+                return Ok(domain_cache.values().cloned().collect());
+            }
         }
     }
 
@@ -383,11 +405,11 @@ fn read_cached_nexus_mods(state: &State<'_, AppState>) -> Result<Vec<NexusModInf
             .db
             .lock()
             .map_err(|e| format!("数据库锁已损坏: {}", e))?;
-        db::nexus_mod_cache_load_db(&db)?
+        db::nexus_mod_cache_load_db(&db, game_domain)?
     };
 
     if !cached_mods.is_empty() {
-        cache_nexus_mods_in_memory(state, &cached_mods)?;
+        cache_nexus_mods_in_memory(state, game_domain, &cached_mods)?;
     }
 
     Ok(cached_mods)
@@ -395,6 +417,7 @@ fn read_cached_nexus_mods(state: &State<'_, AppState>) -> Result<Vec<NexusModInf
 
 fn read_cached_nexus_mods_by_ids(
     state: &State<'_, AppState>,
+    game_domain: &str,
     mod_ids: &[u64],
     max_age_millis: Option<i64>,
 ) -> Result<HashMap<u64, NexusModInfo>, String> {
@@ -408,12 +431,12 @@ fn read_cached_nexus_mods_by_ids(
                 .db
                 .lock()
                 .map_err(|e| format!("数据库锁已损坏: {}", e))?;
-            db::nexus_mod_cache_get_many_db(&db, mod_ids, Some(max_age_millis))?
+            db::nexus_mod_cache_get_many_db(&db, game_domain, mod_ids, Some(max_age_millis))?
         };
 
         if !db_cached.is_empty() {
             let mods_to_hydrate = db_cached.values().cloned().collect::<Vec<_>>();
-            cache_nexus_mods_in_memory(state, &mods_to_hydrate)?;
+            cache_nexus_mods_in_memory(state, game_domain, &mods_to_hydrate)?;
         }
 
         return Ok(db_cached);
@@ -427,9 +450,10 @@ fn read_cached_nexus_mods_by_ids(
             .nexus_mod_cache
             .lock()
             .map_err(|e| format!("Nexus 缓存锁已损坏: {}", e))?;
+        let domain_cache = memory_cache.get(game_domain);
 
         for mod_id in mod_ids {
-            if let Some(mod_info) = memory_cache.get(mod_id) {
+            if let Some(mod_info) = domain_cache.and_then(|cache| cache.get(mod_id)) {
                 cached.insert(*mod_id, mod_info.clone());
             } else {
                 missing_ids.push(*mod_id);
@@ -446,12 +470,12 @@ fn read_cached_nexus_mods_by_ids(
             .db
             .lock()
             .map_err(|e| format!("数据库锁已损坏: {}", e))?;
-        db::nexus_mod_cache_get_many_db(&db, &missing_ids, None)?
+        db::nexus_mod_cache_get_many_db(&db, game_domain, &missing_ids, None)?
     };
 
     if !db_cached.is_empty() {
         let mods_to_hydrate = db_cached.values().cloned().collect::<Vec<_>>();
-        cache_nexus_mods_in_memory(state, &mods_to_hydrate)?;
+        cache_nexus_mods_in_memory(state, game_domain, &mods_to_hydrate)?;
         cached.extend(db_cached);
     }
 
@@ -509,22 +533,27 @@ fn find_matching_cached_mod(
     None
 }
 
-async fn fetch_mod_by_id(mod_id: u64, state: &State<'_, AppState>) -> Result<NexusModInfo, String> {
+async fn fetch_mod_by_id(
+    mod_id: u64,
+    game_domain: &str,
+    state: &State<'_, AppState>,
+) -> Result<NexusModInfo, String> {
     let api_key = get_saved_api_key()?;
-    fetch_mod_by_id_with_key(mod_id, state, &api_key).await
+    fetch_mod_by_id_with_key(mod_id, game_domain, state, &api_key).await
 }
 
 async fn fetch_mod_by_id_with_key(
     mod_id: u64,
+    game_domain: &str,
     state: &State<'_, AppState>,
     api_key: &str,
 ) -> Result<NexusModInfo, String> {
     let mod_info: NexusModInfo = nexus_get(
-        &format!("/games/{}/mods/{}.json", GAME_DOMAIN, mod_id),
+        &format!("/games/{}/mods/{}.json", game_domain, mod_id),
         api_key,
     )
     .await?;
-    cache_nexus_mods(state, &[mod_info.clone()])?;
+    cache_nexus_mods(state, game_domain, &[mod_info.clone()])?;
     Ok(mod_info)
 }
 
@@ -606,15 +635,17 @@ async fn nexus_graphql_post(payload: serde_json::Value) -> Result<NexusPopularLi
 }
 
 async fn fetch_popular_listing_connection(
+    game_domain: &str,
     period: &str,
     page: u64,
     page_size: u64,
 ) -> Result<NexusPopularListingConnection, String> {
-    let payload = build_popular_listing_payload(period, page, page_size)?;
+    let payload = build_popular_listing_payload(game_domain, period, page, page_size)?;
     Ok(nexus_graphql_post(payload).await?.mods)
 }
 
 fn build_popular_listing_payload(
+    game_domain: &str,
     period: &str,
     page: u64,
     page_size: u64,
@@ -650,7 +681,7 @@ fn build_popular_listing_payload(
                 "gameDomainName": [
                     {
                         "op": "EQUALS",
-                        "value": GAME_DOMAIN,
+                        "value": game_domain,
                     }
                 ],
                 "name": [],
@@ -667,8 +698,11 @@ fn build_popular_listing_payload(
     }))
 }
 
-async fn ensure_cached_mod_lists(state: &State<'_, AppState>) -> Result<(), String> {
-    let cached_mods = read_cached_nexus_mods(state)?;
+async fn ensure_cached_mod_lists(
+    state: &State<'_, AppState>,
+    game_domain: &str,
+) -> Result<(), String> {
+    let cached_mods = read_cached_nexus_mods(state, game_domain)?;
     if !cached_mods.is_empty() {
         return Ok(());
     }
@@ -677,7 +711,7 @@ async fn ensure_cached_mod_lists(state: &State<'_, AppState>) -> Result<(), Stri
     let mut collected = Vec::new();
 
     if let Ok(mods) = nexus_get::<Vec<NexusModInfo>>(
-        &format!("/games/{}/mods/trending.json", GAME_DOMAIN),
+        &format!("/games/{}/mods/trending.json", game_domain),
         &api_key,
     )
     .await
@@ -686,7 +720,7 @@ async fn ensure_cached_mod_lists(state: &State<'_, AppState>) -> Result<(), Stri
     }
 
     if let Ok(mods) = nexus_get::<Vec<NexusModInfo>>(
-        &format!("/games/{}/mods/latest_added.json", GAME_DOMAIN),
+        &format!("/games/{}/mods/latest_added.json", game_domain),
         &api_key,
     )
     .await
@@ -695,7 +729,7 @@ async fn ensure_cached_mod_lists(state: &State<'_, AppState>) -> Result<(), Stri
     }
 
     if let Ok(mods) = nexus_get::<Vec<NexusModInfo>>(
-        &format!("/games/{}/mods/latest_updated.json", GAME_DOMAIN),
+        &format!("/games/{}/mods/latest_updated.json", game_domain),
         &api_key,
     )
     .await
@@ -707,15 +741,16 @@ async fn ensure_cached_mod_lists(state: &State<'_, AppState>) -> Result<(), Stri
         return Err("无法预热 Nexus 模组缓存".to_string());
     }
 
-    cache_nexus_mods(state, &collected)
+    cache_nexus_mods(state, game_domain, &collected)
 }
 
 async fn fetch_recently_updated_entries(
+    game_domain: &str,
     period: &str,
     api_key: &str,
 ) -> Result<Vec<NexusUpdatedEntry>, String> {
     nexus_get(
-        &format!("/games/{}/mods/updated.json?period={}", GAME_DOMAIN, period),
+        &format!("/games/{}/mods/updated.json?period={}", game_domain, period),
         api_key,
     )
     .await
@@ -723,6 +758,7 @@ async fn fetch_recently_updated_entries(
 
 async fn resolve_recently_updated_page_items(
     state: &State<'_, AppState>,
+    game_domain: &str,
     api_key: &str,
     page_mod_ids: &[u64],
     force_refresh: bool,
@@ -730,12 +766,17 @@ async fn resolve_recently_updated_page_items(
     let fresh_cached_mods = if force_refresh {
         HashMap::new()
     } else {
-        read_cached_nexus_mods_by_ids(state, page_mod_ids, Some(PAGED_MOD_CACHE_MAX_AGE_MILLIS))?
+        read_cached_nexus_mods_by_ids(
+            state,
+            game_domain,
+            page_mod_ids,
+            Some(PAGED_MOD_CACHE_MAX_AGE_MILLIS),
+        )?
     };
     let fallback_cached_mods = if force_refresh {
         HashMap::new()
     } else {
-        read_cached_nexus_mods_by_ids(state, page_mod_ids, None)?
+        read_cached_nexus_mods_by_ids(state, game_domain, page_mod_ids, None)?
     };
     let mut resolved = Vec::with_capacity(page_mod_ids.len());
     let mut fallback_count = 0_u64;
@@ -749,7 +790,7 @@ async fn resolve_recently_updated_page_items(
             }
         }
 
-        match fetch_mod_by_id_with_key(*mod_id, state, api_key).await {
+        match fetch_mod_by_id_with_key(*mod_id, game_domain, state, api_key).await {
             Ok(mod_info) => resolved.push(mod_info),
             Err(error) => {
                 if let Some(cached) = fresh_cached_mods
@@ -794,13 +835,14 @@ pub async fn nexus_validate_key(key: String) -> Result<NexusValidateResult, Stri
 
 #[tauri::command]
 pub async fn nexus_get_trending(state: State<'_, AppState>) -> Result<Vec<NexusModInfo>, String> {
+    let game_domain = current_game_domain(&state)?;
     let api_key = get_saved_api_key()?;
     let mods: Vec<NexusModInfo> = nexus_get(
-        &format!("/games/{}/mods/trending.json", GAME_DOMAIN),
+        &format!("/games/{}/mods/trending.json", game_domain),
         &api_key,
     )
     .await?;
-    cache_nexus_mods(&state, &mods)?;
+    cache_nexus_mods(&state, &game_domain, &mods)?;
     Ok(mods)
 }
 
@@ -808,13 +850,14 @@ pub async fn nexus_get_trending(state: State<'_, AppState>) -> Result<Vec<NexusM
 pub async fn nexus_get_latest_added(
     state: State<'_, AppState>,
 ) -> Result<Vec<NexusModInfo>, String> {
+    let game_domain = current_game_domain(&state)?;
     let api_key = get_saved_api_key()?;
     let mods: Vec<NexusModInfo> = nexus_get(
-        &format!("/games/{}/mods/latest_added.json", GAME_DOMAIN),
+        &format!("/games/{}/mods/latest_added.json", game_domain),
         &api_key,
     )
     .await?;
-    cache_nexus_mods(&state, &mods)?;
+    cache_nexus_mods(&state, &game_domain, &mods)?;
     Ok(mods)
 }
 
@@ -822,13 +865,14 @@ pub async fn nexus_get_latest_added(
 pub async fn nexus_get_latest_updated(
     state: State<'_, AppState>,
 ) -> Result<Vec<NexusModInfo>, String> {
+    let game_domain = current_game_domain(&state)?;
     let api_key = get_saved_api_key()?;
     let mods: Vec<NexusModInfo> = nexus_get(
-        &format!("/games/{}/mods/latest_updated.json", GAME_DOMAIN),
+        &format!("/games/{}/mods/latest_updated.json", game_domain),
         &api_key,
     )
     .await?;
-    cache_nexus_mods(&state, &mods)?;
+    cache_nexus_mods(&state, &game_domain, &mods)?;
     Ok(mods)
 }
 
@@ -840,10 +884,11 @@ pub async fn nexus_get_recently_updated_page(
     force_refresh: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<NexusPagedModsResult, String> {
+    let game_domain = current_game_domain(&state)?;
     let api_key = get_saved_api_key()?;
     let period = normalize_recently_updated_period(&period)?.to_string();
     let requested_page_size = normalize_page_size(page_size);
-    let entries = fetch_recently_updated_entries(&period, &api_key).await?;
+    let entries = fetch_recently_updated_entries(&game_domain, &period, &api_key).await?;
 
     let mut unique_ids = Vec::with_capacity(entries.len());
     let mut seen_ids = HashSet::new();
@@ -875,6 +920,7 @@ pub async fn nexus_get_recently_updated_page(
 
     let (items, warning) = resolve_recently_updated_page_items(
         &state,
+        &game_domain,
         &api_key,
         &page_mod_ids,
         force_refresh.unwrap_or(false),
@@ -899,13 +945,20 @@ pub async fn nexus_get_popular_page(
     page: u64,
     page_size: u64,
     _force_refresh: Option<bool>,
+    state: State<'_, AppState>,
 ) -> Result<NexusPagedModsResult, String> {
+    let game_domain = current_game_domain(&state)?;
     let period = normalize_popular_period(&period)?.to_string();
     let requested_page = normalize_page(page);
     let requested_page_size = normalize_page_size(page_size);
 
-    let mut listing =
-        fetch_popular_listing_connection(&period, requested_page, requested_page_size).await?;
+    let mut listing = fetch_popular_listing_connection(
+        &game_domain,
+        &period,
+        requested_page,
+        requested_page_size,
+    )
+    .await?;
     let total_items = listing.total_count;
     let total_pages = if total_items == 0 {
         0
@@ -919,7 +972,9 @@ pub async fn nexus_get_popular_page(
     };
 
     if total_pages > 0 && page != requested_page {
-        listing = fetch_popular_listing_connection(&period, page, requested_page_size).await?;
+        listing =
+            fetch_popular_listing_connection(&game_domain, &period, page, requested_page_size)
+                .await?;
     }
 
     // Keep list results out of the full mod-detail cache because the GraphQL listing
@@ -947,14 +1002,19 @@ pub async fn nexus_get_mod(
     mod_id: u64,
     state: State<'_, AppState>,
 ) -> Result<NexusModInfo, String> {
-    fetch_mod_by_id(mod_id, &state).await
+    let game_domain = current_game_domain(&state)?;
+    fetch_mod_by_id(mod_id, &game_domain, &state).await
 }
 
 #[tauri::command]
-pub async fn nexus_get_mod_files(mod_id: u64) -> Result<Vec<NexusFileInfo>, String> {
+pub async fn nexus_get_mod_files(
+    mod_id: u64,
+    state: State<'_, AppState>,
+) -> Result<Vec<NexusFileInfo>, String> {
+    let game_domain = current_game_domain(&state)?;
     let api_key = get_saved_api_key()?;
     let response: NexusFilesResponse = nexus_get(
-        &format!("/games/{}/mods/{}/files.json", GAME_DOMAIN, mod_id),
+        &format!("/games/{}/mods/{}/files.json", game_domain, mod_id),
         &api_key,
     )
     .await?;
@@ -974,9 +1034,10 @@ pub async fn nexus_find_mod_by_name(
     let Some(local_mod) = find_local_mod(lookup, &state) else {
         return Ok(None);
     };
+    let game_domain = current_game_domain(&state)?;
 
     if let Some(nexus_id) = local_mod.nexus_id {
-        let cached_mods = read_cached_nexus_mods(&state)?;
+        let cached_mods = read_cached_nexus_mods(&state, &game_domain)?;
         if let Some(exact_id_match) = cached_mods
             .iter()
             .find(|mod_info| mod_info.mod_id == nexus_id)
@@ -985,7 +1046,7 @@ pub async fn nexus_find_mod_by_name(
             return Ok(Some(exact_id_match));
         }
 
-        match fetch_mod_by_id(nexus_id, &state).await {
+        match fetch_mod_by_id(nexus_id, &game_domain, &state).await {
             Ok(mod_info) => return Ok(Some(mod_info)),
             Err(error) => {
                 eprintln!(
@@ -996,11 +1057,11 @@ pub async fn nexus_find_mod_by_name(
         }
     }
 
-    if let Err(error) = ensure_cached_mod_lists(&state).await {
+    if let Err(error) = ensure_cached_mod_lists(&state, &game_domain).await {
         eprintln!("Failed to prime Nexus cache: {}", error);
     }
 
-    let cached_mods = read_cached_nexus_mods(&state)?;
+    let cached_mods = read_cached_nexus_mods(&state, &game_domain)?;
     Ok(
         find_matching_cached_mod(&local_mod, &cached_mods).or_else(|| {
             cached_mods.into_iter().find(|mod_info| {
@@ -1029,7 +1090,7 @@ mod tests {
 
     #[test]
     fn popular_payload_sorts_by_endorsements_and_filters_updated_at() {
-        let payload = build_popular_listing_payload("1w", 2, 20).unwrap();
+        let payload = build_popular_listing_payload("examplegame", "1w", 2, 20).unwrap();
 
         assert_eq!(payload["variables"]["offset"], 20);
         assert_eq!(payload["variables"]["count"], 20);
@@ -1049,7 +1110,7 @@ mod tests {
     fn graphql_listing_nodes_stay_partial() {
         let node = NexusPopularModNode {
             mod_id: 461,
-            name: "STS2 Mod Manager".to_string(),
+            name: "Nexus Mod Manager".to_string(),
             summary: "manager".to_string(),
             downloads: 321,
             endorsements: 8,

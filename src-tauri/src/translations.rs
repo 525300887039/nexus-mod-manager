@@ -10,16 +10,27 @@ fn resolve_translation_game_path(state: &tauri::State<'_, AppState>) -> Option<S
         .or_else(config::load_or_detect_game_path)
 }
 
+fn current_game_domain(state: &tauri::State<'_, AppState>) -> String {
+    state
+        .current_profile
+        .lock()
+        .ok()
+        .and_then(|profile| profile.as_ref().map(|profile| profile.nexus_domain.clone()))
+        .or_else(|| config::load_current_profile().map(|profile| profile.nexus_domain))
+        .unwrap_or_default()
+}
+
 fn collect_translation_cache_map(state: &tauri::State<'_, AppState>) -> Result<Value, String> {
+    let game_domain = current_game_domain(state);
     let game_path = resolve_translation_game_path(state);
     let mut db = state
         .db
         .lock()
-        .map_err(|e| format!("数据库锁已损坏: {}", e))?;
+        .map_err(|e| format!("database lock poisoned: {}", e))?;
     if let Some(ref game_path) = game_path {
-        db::sync_saved_translations_with_game_path_db(&mut db, game_path)?;
+        db::sync_saved_translations_with_game_path_db(&mut db, &game_domain, game_path)?;
     }
-    let saved_translations = db::saved_translations_load_db(&db)?;
+    let saved_translations = db::saved_translations_load_db(&db, &game_domain)?;
     let mut result = Map::new();
 
     for (mod_id, saved_row) in saved_translations {
@@ -46,9 +57,10 @@ fn persist_translation_cache_map(
     data: &Value,
 ) -> Result<(), String> {
     let Some(entries) = data.as_object() else {
-        return Err("translations_save 需要对象格式数据".to_string());
+        return Err("translations_save expects an object payload".to_string());
     };
 
+    let game_domain = current_game_domain(state);
     let game_path = resolve_translation_game_path(state);
     let mod_lookup = game_path
         .as_deref()
@@ -66,7 +78,7 @@ fn persist_translation_cache_map(
     let db = state
         .db
         .lock()
-        .map_err(|e| format!("数据库锁已损坏: {}", e))?;
+        .map_err(|e| format!("database lock poisoned: {}", e))?;
 
     for (mod_id, value) in entries {
         let Some(entry) = value.as_object() else {
@@ -84,6 +96,7 @@ fn persist_translation_cache_map(
 
         db::saved_translation_upsert_db(
             &db,
+            &game_domain,
             mod_id,
             translated_name,
             translated_desc,
@@ -92,10 +105,10 @@ fn persist_translation_cache_map(
         )?;
 
         if let (Some(source_text), Some(translated)) = (source_name, translated_name) {
-            db::translation_cache_set_db(&db, source_text, translated, "compat")?;
+            db::translation_cache_set_db(&db, &game_domain, source_text, translated, "compat")?;
         }
         if let (Some(source_text), Some(translated)) = (source_desc, translated_desc) {
-            db::translation_cache_set_db(&db, source_text, translated, "compat")?;
+            db::translation_cache_set_db(&db, &game_domain, source_text, translated, "compat")?;
         }
     }
 

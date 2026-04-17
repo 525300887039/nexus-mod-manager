@@ -12,12 +12,23 @@ fn lock_db<'a>(
         .map_err(|e| format!("数据库锁已损坏: {}", e))
 }
 
+fn current_game_domain(state: &State<'_, AppState>) -> Result<String, String> {
+    state
+        .current_profile
+        .lock()
+        .map_err(|e| format!("game profile lock poisoned: {}", e))?
+        .as_ref()
+        .map(|profile| profile.nexus_domain.clone())
+        .ok_or_else(|| "please select a game first".to_string())
+}
+
 fn read_cached_translation(
     state: &State<'_, AppState>,
     text: &str,
 ) -> Result<Option<String>, String> {
     let db = lock_db(state)?;
-    db::translation_cache_get_db(&db, text)
+    let game_domain = current_game_domain(state)?;
+    db::translation_cache_get_db(&db, &game_domain, text)
 }
 
 fn write_cached_translation(
@@ -27,7 +38,8 @@ fn write_cached_translation(
     provider: &str,
 ) -> Result<(), String> {
     let db = lock_db(state)?;
-    db::translation_cache_set_db(&db, text, translated, provider)
+    let game_domain = current_game_domain(state)?;
+    db::translation_cache_set_db(&db, &game_domain, text, translated, provider)
 }
 
 fn llm_mode(config: &translate_llm::LlmConfig) -> &str {
