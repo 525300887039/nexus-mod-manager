@@ -123,7 +123,7 @@ export function sanitizeExternalUrl(rawUrl) {
   return null;
 }
 
-export function parseNexusModUrl(rawUrl) {
+export function parseNexusModUrl(rawUrl, gameDomain = 'slaythespire2') {
   const sanitized = sanitizeExternalUrl(rawUrl);
   if (!sanitized) {
     throw new Error('请输入有效的 Nexus Mods 链接');
@@ -145,8 +145,12 @@ export function parseNexusModUrl(rawUrl) {
     .map((segment) => segment.trim())
     .filter(Boolean);
 
-  if (segments[0] !== 'slaythespire2' || segments[1] !== 'mods') {
-    throw new Error('仅支持 Slay the Spire 2 的 Nexus Mod 链接');
+  if (!gameDomain) {
+    throw new Error('请先选择当前管理的游戏');
+  }
+
+  if (segments[0] !== gameDomain || segments[1] !== 'mods') {
+    throw new Error('该链接不属于当前管理的游戏');
   }
 
   const modIdValue = segments[2] || '';
@@ -166,10 +170,10 @@ export function parseNexusModUrl(rawUrl) {
   }
 
   const canonicalUrl = fileId
-    ? `https://www.nexusmods.com/slaythespire2/mods/${modId}?tab=files&file_id=${fileId}`
+    ? `https://www.nexusmods.com/${gameDomain}/mods/${modId}?tab=files&file_id=${fileId}`
     : parsed.searchParams.get('tab') === 'files'
-      ? `https://www.nexusmods.com/slaythespire2/mods/${modId}?tab=files`
-      : `https://www.nexusmods.com/slaythespire2/mods/${modId}`;
+      ? `https://www.nexusmods.com/${gameDomain}/mods/${modId}?tab=files`
+      : `https://www.nexusmods.com/${gameDomain}/mods/${modId}`;
 
   return {
     modId,

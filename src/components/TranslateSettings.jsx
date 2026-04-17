@@ -372,7 +372,7 @@ export default function TranslateSettings({ embedded = false, onShowToast, onCon
                 <div className="mb-5">
                   <h3 className="text-sm font-semibold text-gray-900">大模型 API 配置</h3>
                   <p className="mt-1 text-sm text-gray-500">
-                    配置会保存到本地 `%APPDATA%/STS2ModManager/llm_config.json`。支持 OpenAI、兼容网关和本地 Ollama。
+                    配置会保存到本地应用配置目录中的 `llm_config.json`。支持 OpenAI、兼容网关和本地 Ollama。
                   </p>
                 </div>
 

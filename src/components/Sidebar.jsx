@@ -1,24 +1,39 @@
 import React from 'react';
 import {
-  Package, FileText, FolderOpen, Save, ExternalLink, Globe, Settings,
+  ChevronRight, FileText, FolderOpen, Globe, Package, Save, Settings, Shuffle, ExternalLink,
 } from 'lucide-react';
 
-const navItems = [
-  { id: 'mods', icon: Package, label: 'MOD 管理' },
-  { id: 'nexus', icon: Globe, label: 'Nexus 浏览' },
-  { id: 'saves', icon: Save, label: '存档管理' },
-  { id: 'logs', icon: FileText, label: '游戏日志' },
-  { id: 'settings', icon: Settings, label: '设置' },
-];
+export default function Sidebar({
+  currentGame,
+  page,
+  setPage,
+  gamePath,
+  onSelectGamePath,
+  onSwitchGame,
+  enabledCount,
+  totalCount,
+  gameVersion,
+}) {
+  const navItems = [
+    { id: 'mods', icon: Package, label: 'MOD 管理' },
+    { id: 'nexus', icon: Globe, label: 'Nexus 浏览' },
+    currentGame?.savesEnabled && { id: 'saves', icon: Save, label: '存档管理' },
+    currentGame?.logsEnabled && { id: 'logs', icon: FileText, label: '游戏日志' },
+    { id: 'settings', icon: Settings, label: '设置' },
+  ].filter(Boolean);
 
-const quickLinks = [
-  { id: 'nexus', icon: ExternalLink, label: 'Nexus Mods', action: () => window.api.openUrl('https://www.nexusmods.com/slaythespire2') },
-  { id: 'modsDir', icon: FolderOpen, label: 'MOD 文件夹', action: () => window.api.openModsDir() },
-  { id: 'logsDir', icon: FileText, label: '日志文件夹', action: () => window.api.openLogsDir() },
-  { id: 'savesDir', icon: Save, label: '存档文件夹', action: () => window.api.openSavesDir() },
-];
+  const quickLinks = [
+    currentGame?.nexusDomain && {
+      id: 'nexus',
+      icon: ExternalLink,
+      label: 'Nexus Mods',
+      action: () => window.api.openUrl(`https://www.nexusmods.com/${currentGame.nexusDomain}`),
+    },
+    { id: 'modsDir', icon: FolderOpen, label: 'MOD 文件夹', action: () => window.api.openModsDir() },
+    currentGame?.logsEnabled && { id: 'logsDir', icon: FileText, label: '日志文件夹', action: () => window.api.openLogsDir() },
+    currentGame?.savesEnabled && { id: 'savesDir', icon: Save, label: '存档文件夹', action: () => window.api.openSavesDir() },
+  ].filter(Boolean);
 
-export default function Sidebar({ page, setPage, gamePath, onSelectGamePath, enabledCount, totalCount, gameVersion }) {
   return (
     <div className="w-56 bg-white border-r border-gray-100 flex flex-col">
       {/* Nav */}
@@ -52,7 +67,31 @@ export default function Sidebar({ page, setPage, gamePath, onSelectGamePath, ena
 
       {/* Game path */}
       <div className="p-3 border-t border-gray-100">
-        <div className="bg-gray-50 rounded-lg p-3">
+        <div className="bg-gray-50 rounded-xl p-3">
+          <div className="mb-3 rounded-lg bg-white px-3 py-3 shadow-sm">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold text-gray-400 uppercase">当前游戏</p>
+                <p className="mt-1 text-sm font-semibold text-gray-800 truncate">
+                  {currentGame?.displayName || '未选择'}
+                </p>
+                {currentGame?.nexusDomain && (
+                  <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-gray-400">
+                    {currentGame.nexusDomain}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={onSwitchGame}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                title="切换当前游戏"
+              >
+                <Shuffle size={12} />
+                切换
+              </button>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between mb-1">
             <p className="text-[10px] font-semibold text-gray-400 uppercase">游戏路径</p>
             <button onClick={onSelectGamePath}
@@ -79,6 +118,21 @@ export default function Sidebar({ page, setPage, gamePath, onSelectGamePath, ena
               <p className="text-[10px] text-gray-400">游戏版本: <span className="text-gray-600 font-medium">{gameVersion}</span></p>
             </div>
           )}
+          {!currentGame?.logsEnabled && !currentGame?.savesEnabled && (
+            <div className="mt-2 pt-2 border-t border-gray-100">
+              <p className="text-[10px] leading-4 text-gray-400">
+                当前游戏仅启用基础 MOD 管理；存档和日志功能会自动隐藏。
+              </p>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={onSwitchGame}
+            className="mt-3 inline-flex w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+          >
+            <span>切换到其他游戏</span>
+            <ChevronRight size={14} />
+          </button>
         </div>
       </div>
     </div>

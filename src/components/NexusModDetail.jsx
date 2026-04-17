@@ -45,6 +45,7 @@ function canAutoInstallFile(file) {
 
 export default function NexusModDetail({
   mod,
+  currentGame,
   initialFileId = null,
   translationEntry,
   onClose,
@@ -109,6 +110,7 @@ export default function NexusModDetail({
   }, [mod]);
 
   const currentMod = { ...mod, ...detail };
+  const gameDomain = currentGame?.nexusDomain;
   const detailContent = currentMod.description || currentMod.summary || '';
   const translatedName = translationEntry?.name || '';
   const translatedDescription = useMemo(
@@ -454,7 +456,8 @@ export default function NexusModDetail({
       <div className="space-y-2 border-t border-gray-100 p-4">
         <button
           type="button"
-          onClick={() => window.api.openUrl(`https://www.nexusmods.com/slaythespire2/mods/${currentMod.modId}`)}
+          onClick={() => gameDomain && window.api.openUrl(`https://www.nexusmods.com/${gameDomain}/mods/${currentMod.modId}`)}
+          disabled={!gameDomain}
           className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-gray-800"
         >
           <Globe size={16} />

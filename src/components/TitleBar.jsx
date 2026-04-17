@@ -1,14 +1,20 @@
 import React from 'react';
 import { Minus, Square, X, Github } from 'lucide-react';
 
-export default function TitleBar() {
+const REPOSITORY_URL = 'https://github.com/525300887039/nexus-mod-manager';
+
+export default function TitleBar({ currentGame }) {
+  const title = currentGame?.displayName
+    ? `Nexus Mod Manager - ${currentGame.displayName}`
+    : 'Nexus Mod Manager';
+
   return (
     <div className="titlebar flex items-center justify-between h-10 bg-gray-900 px-4 select-none">
       <div className="flex items-center gap-2">
-        <span className="text-white text-sm font-semibold tracking-wide">STS2 Mod Manager</span>
+        <span className="text-white text-sm font-semibold tracking-wide">{title}</span>
       </div>
       <div className="flex items-center">
-        <button onClick={() => window.api.openUrl('https://github.com/525300887039/sts2-mod-manager')}
+        <button onClick={() => window.api.openUrl(REPOSITORY_URL)}
           className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
           title="GitHub">
           <Github size={14} />
