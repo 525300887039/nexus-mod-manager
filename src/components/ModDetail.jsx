@@ -95,6 +95,7 @@ function compareVersions(localVersion, nexusVersion) {
 }
 
 export default function ModDetail({
+  currentGame,
   mod,
   allMods,
   onClose,
@@ -109,6 +110,7 @@ export default function ModDetail({
   const dependents = allMods.filter(m => m.dependencies && m.dependencies.includes(mod.id) && m.enabled);
   const category = getModCategory(mod, allMods);
   const CategoryIcon = category.icon;
+  const gameDomain = currentGame?.nexusDomain;
 
   const [translatedDesc, setTranslatedDesc] = useState(null);
   const [translatedName, setTranslatedName] = useState(null);
@@ -199,8 +201,8 @@ export default function ModDetail({
   const hasUpdate = versionComparison === -1;
 
   const openNexusPage = () => {
-    if (nexusMatch?.modId) {
-      window.api.openUrl(`https://www.nexusmods.com/slaythespire2/mods/${nexusMatch.modId}`);
+    if (nexusMatch?.modId && gameDomain) {
+      window.api.openUrl(`https://www.nexusmods.com/${gameDomain}/mods/${nexusMatch.modId}`);
     }
   };
 
@@ -276,11 +278,12 @@ export default function ModDetail({
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Nexus Mods</p>
                 <p className="mt-2 truncate text-sm font-semibold text-gray-900">{nexusMatch.name}</p>
               </div>
-              <button
-                type="button"
-                onClick={openNexusPage}
-                className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
-              >
+                <button
+                  type="button"
+                  onClick={openNexusPage}
+                  disabled={!gameDomain}
+                  className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+                >
                 <ExternalLink size={13} />
                 在 Nexus 查看
               </button>

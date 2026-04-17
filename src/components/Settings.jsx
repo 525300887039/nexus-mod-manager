@@ -10,7 +10,10 @@ import {
 import NexusSettings from './NexusSettings';
 import TranslateSettings from './TranslateSettings';
 
-const VERSION = '2.1.0';
+const VERSION = '3.0.0';
+const APP_NAME = 'Nexus Mod Manager';
+const REPOSITORY_URL = 'https://github.com/525300887039/nexus-mod-manager';
+const UPSTREAM_URL = 'https://github.com/ImogeneOctaviap794/nexus-mod-manager';
 const TABS = [
   { id: 'nexus', label: 'Nexus Mods', icon: Globe },
   { id: 'translate', label: '翻译设置', icon: Languages },
@@ -109,8 +112,8 @@ export default function Settings({
                   <Shield size={24} />
                 </div>
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">STS2 Mod Manager</p>
-                  <h2 className="mt-2 text-2xl font-bold text-gray-900">统一管理 Slay the Spire 2 MOD 与 Nexus 工作流</h2>
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">{APP_NAME}</p>
+                  <h2 className="mt-2 text-2xl font-bold text-gray-900">统一管理多游戏 MOD 与 Nexus 工作流</h2>
                   <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-500">
                     当前版本 {VERSION}，许可证为 MIT。这个分支延续原项目的本地 MOD 管理能力，并补齐 Nexus 浏览、下载和翻译整合体验。
                   </p>
@@ -122,17 +125,17 @@ export default function Settings({
             <AboutCard title="许可证" value="MIT" icon={Shield} />
             <AboutCard
               title="原项目"
-              value="https://github.com/ImogeneOctaviap794/sts2-mod-manager"
+              value={UPSTREAM_URL}
               icon={Github}
               actionLabel="打开"
-              onAction={() => window.api.openUrl('https://github.com/ImogeneOctaviap794/sts2-mod-manager')}
+              onAction={() => window.api.openUrl(UPSTREAM_URL)}
             />
             <AboutCard
               title="Fork 项目"
-              value="https://github.com/525300887039/sts2-mod-manager"
+              value={REPOSITORY_URL}
               icon={Github}
               actionLabel="打开"
-              onAction={() => window.api.openUrl('https://github.com/525300887039/sts2-mod-manager')}
+              onAction={() => window.api.openUrl(REPOSITORY_URL)}
             />
           </div>
         )}

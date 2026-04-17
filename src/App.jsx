@@ -9,6 +9,7 @@ import SaveManager from './components/SaveManager';
 import Settings from './components/Settings';
 import TitleBar from './components/TitleBar';
 import DownloadProgress from './components/DownloadProgress';
+import GameSelector from './components/GameSelector';
 import {
   Download, RefreshCw, Search, FolderOpen, Archive, UploadCloud, Play, Loader, X, AlertTriangle, Info,
   ToggleLeft, ToggleRight, Trash2, Layers, Save, ChevronDown, Package, LayoutGrid, List,
@@ -21,6 +22,9 @@ const VALID_SETTINGS_TABS = new Set(['nexus', 'translate', 'about']);
 export default function App() {
   const [page, setPage] = useState('mods');
   const [settingsTab, setSettingsTab] = useState('nexus');
+  const [currentGame, setCurrentGame] = useState(null);
+  const [showGameSelector, setShowGameSelector] = useState(false);
+  const [initializingApp, setInitializingApp] = useState(true);
   const [mods, setMods] = useState([]);
   const [selectedMod, setSelectedMod] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -149,11 +153,21 @@ export default function App() {
 
   const handleNavigate = useCallback((nextPage, options = {}) => {
     const targetPage = VALID_PAGES.has(nextPage) ? nextPage : 'mods';
+    if (targetPage === 'saves' && !currentGame?.savesEnabled) {
+      setPage('mods');
+      showToast('当前游戏不支持存档管理，已返回 MOD 管理', 'error');
+      return;
+    }
+    if (targetPage === 'logs' && !currentGame?.logsEnabled) {
+      setPage('mods');
+      showToast('当前游戏不支持游戏日志，已返回 MOD 管理', 'error');
+      return;
+    }
     if (targetPage === 'settings' && options.tab) {
       setSettingsTab(VALID_SETTINGS_TABS.has(options.tab) ? options.tab : 'nexus');
     }
     setPage(targetPage);
-  }, []);
+  }, [currentGame, showToast]);
 
   const syncMods = useCallback((list) => {
     setMods(list);
@@ -163,7 +177,12 @@ export default function App() {
     });
   }, []);
 
-  const refreshMods = useCallback(async () => {
+  const refreshMods = useCallback(async ({ gamePath: nextGamePath = gamePath } = {}) => {
+    if (!nextGamePath) {
+      syncMods([]);
+      return [];
+    }
+
     setLoading(true);
     try {
       const list = await window.api.scanMods();
@@ -175,7 +194,43 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [showToast, syncMods]);
+  }, [gamePath, showToast, syncMods]);
+
+  const resetGameViewState = useCallback(() => {
+    syncMods([]);
+    setSelectedMod(null);
+    setSelectedIds(new Set());
+    setCrashReport(null);
+    setGameVersion(null);
+    setDownloadStatus(null);
+  }, [syncMods]);
+
+  const reloadProfiles = useCallback(async () => {
+    try {
+      const loadedProfiles = await window.api.loadProfiles();
+      const nextProfiles = loadedProfiles || {};
+      setProfiles(nextProfiles);
+      return nextProfiles;
+    } catch (_error) {
+      setProfiles({});
+      return {};
+    }
+  }, []);
+
+  const applyInitInfo = useCallback(async (info) => {
+    const nextGame = info?.currentGame || null;
+    const nextGamePath = info?.gamePath || null;
+
+    setCurrentGame(nextGame);
+    setGamePath(nextGamePath);
+
+    if (!nextGamePath) {
+      syncMods([]);
+      return [];
+    }
+
+    return refreshMods({ gamePath: nextGamePath });
+  }, [refreshMods, syncMods]);
 
   useEffect(() => {
     let cancelled = false;
@@ -187,16 +242,23 @@ export default function App() {
           return;
         }
 
+        setCurrentGame(info?.currentGame || null);
         setGamePath(info?.gamePath || null);
         if (info?.gamePath) {
           const list = await window.api.scanMods();
           if (!cancelled) {
             syncMods(list);
           }
+        } else if (!cancelled) {
+          syncMods([]);
         }
       } catch (error) {
         if (!cancelled) {
           showToast(error?.message || String(error), 'error');
+        }
+      } finally {
+        if (!cancelled) {
+          setInitializingApp(false);
         }
       }
     })();
@@ -205,6 +267,20 @@ export default function App() {
       cancelled = true;
     };
   }, [showToast, syncMods]);
+
+  useEffect(() => {
+    const unsupportedPage = (
+      (page === 'saves' && currentGame && !currentGame.savesEnabled)
+      || (page === 'logs' && currentGame && !currentGame.logsEnabled)
+    );
+
+    if (!unsupportedPage) {
+      return;
+    }
+
+    setPage('mods');
+    showToast('当前游戏不支持该功能，已返回 MOD 管理', 'error');
+  }, [currentGame, page, showToast]);
 
   useEffect(() => {
     const tauriEvent = window.__TAURI__?.event;
@@ -264,9 +340,36 @@ export default function App() {
   }, [refreshMods, showToast]);
 
   const handleSelectGamePath = async () => {
-    const info = await window.api.selectGamePath();
-    if (info) { setGamePath(info.gamePath); refreshMods(); }
+    try {
+      const info = await window.api.selectGamePath();
+      if (!info) {
+        return;
+      }
+
+      setCurrentGame(info.currentGame || currentGame);
+      setGamePath(info.gamePath || null);
+      if (info.gamePath) {
+        await refreshMods({ gamePath: info.gamePath });
+      } else {
+        syncMods([]);
+      }
+    } catch (error) {
+      showToast(error?.message || String(error), 'error');
+    }
   };
+
+  const handleGameSelected = useCallback(async (game, infoOverride = null) => {
+    try {
+      setShowGameSelector(false);
+      resetGameViewState();
+
+      const info = infoOverride || await window.api.switchGame(game.nexusDomain);
+      await applyInitInfo(info);
+      await reloadProfiles();
+    } catch (error) {
+      showToast(error?.message || String(error), 'error');
+    }
+  }, [applyInitInfo, reloadProfiles, resetGameViewState, showToast]);
 
   const handleToggle = async (mod) => {
     const result = await window.api.toggleMod(mod);
@@ -471,17 +574,48 @@ export default function App() {
 
   const enabledCount = mods.filter(m => m.enabled).length;
   const disabledCount = mods.filter(m => !m.enabled).length;
+  const canLaunchGame = Boolean(currentGame?.steamAppId || currentGame?.exeName);
+  const showFullscreenSelector = !initializingApp && !currentGame;
+
+  if (initializingApp) {
+    return (
+      <div className="h-screen flex flex-col bg-white text-gray-900">
+        <TitleBar currentGame={currentGame} />
+        <div className="flex flex-1 items-center justify-center bg-gray-50">
+          <div className="flex items-center gap-3 text-sm text-gray-500">
+            <Loader size={18} className="animate-spin" />
+            正在初始化应用...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (showFullscreenSelector) {
+    return (
+      <div className="h-screen flex flex-col bg-slate-950 text-white">
+        <TitleBar currentGame={currentGame} />
+        <GameSelector
+          mode="fullscreen"
+          currentGame={currentGame}
+          onGameSelected={handleGameSelected}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen flex flex-col bg-white text-gray-900">
-      <TitleBar />
+      <TitleBar currentGame={currentGame} />
 
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
+          currentGame={currentGame}
           page={page}
           setPage={handleNavigate}
           gamePath={gamePath}
           onSelectGamePath={handleSelectGamePath}
+          onSwitchGame={() => setShowGameSelector(true)}
           enabledCount={enabledCount}
           totalCount={mods.length}
           gameVersion={gameVersion}
@@ -562,17 +696,26 @@ export default function App() {
                       )}
                     </div>
                     <button onClick={handleLaunchGame}
-                      disabled={gameState !== 'idle'}
+                      disabled={gameState !== 'idle' || !canLaunchGame}
+                      title={!canLaunchGame ? '当前游戏未配置启动方式' : '启动游戏'}
                       className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        gameState === 'idle'
+                        !canLaunchGame
+                          ? 'bg-gray-300 text-white cursor-not-allowed'
+                          : gameState === 'idle'
                           ? 'bg-emerald-600 text-white hover:bg-emerald-500'
                           : gameState === 'launching'
                             ? 'bg-amber-500 text-white cursor-wait'
                             : 'bg-blue-500 text-white cursor-default'
                       }`}>
-                      {gameState === 'idle' && <><Play size={14} /> 启动游戏</>}
-                      {gameState === 'launching' && <><Loader size={14} className="animate-spin" /> 正在启动...</>}
-                      {gameState === 'running' && <><span className="w-2 h-2 rounded-full bg-white animate-pulse" /> 游戏运行中</>}
+                      {!canLaunchGame ? (
+                        <><Play size={14} /> 未配置启动方式</>
+                      ) : gameState === 'idle' ? (
+                        <><Play size={14} /> 启动游戏</>
+                      ) : gameState === 'launching' ? (
+                        <><Loader size={14} className="animate-spin" /> 正在启动...</>
+                      ) : (
+                        <><span className="w-2 h-2 rounded-full bg-white animate-pulse" /> 游戏运行中</>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -688,7 +831,7 @@ export default function App() {
                   <div className="flex-1 overflow-y-auto px-8 pb-6">
                     {!gamePath ? (
                       <div className="flex flex-col items-center justify-center h-full">
-                        <h2 className="text-xl font-bold text-gray-800 mb-2">欢迎使用 STS2 Mod Manager</h2>
+                        <h2 className="text-xl font-bold text-gray-800 mb-2">欢迎使用 Nexus Mod Manager</h2>
                         <p className="text-sm text-gray-400 mb-8">按以下步骤开始管理你的 MOD</p>
                         <div className="flex gap-5 max-w-2xl">
                           <div onClick={handleSelectGamePath}
@@ -697,7 +840,7 @@ export default function App() {
                               <FolderOpen size={22} />
                             </div>
                             <p className="font-semibold text-gray-800 mb-1">1. 选择游戏目录</p>
-                            <p className="text-xs text-gray-400">定位你的 Slay the Spire 2 安装位置</p>
+                            <p className="text-xs text-gray-400">定位你的 {currentGame.displayName} 安装位置</p>
                           </div>
                           <div className="flex-1 bg-white rounded-xl border border-gray-100 p-6 text-center opacity-50">
                             <div className="w-12 h-12 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center mx-auto mb-3">
@@ -714,7 +857,11 @@ export default function App() {
                             <p className="text-xs text-gray-400">启动游戏确认 MOD 正常加载</p>
                           </div>
                         </div>
-                        <p className="text-xs text-gray-300 mt-6">遇到问题？查看侧边栏「游戏日志」获取崩溃分析</p>
+                        <p className="text-xs text-gray-300 mt-6">
+                          {currentGame.logsEnabled
+                            ? '遇到问题？查看侧边栏「游戏日志」获取崩溃分析'
+                            : '完成目录配置后，即可开始为当前游戏安装和管理 MOD'}
+                        </p>
                       </div>
                     ) : gamePath && mods.length === 0 && !search ? (
                       <div className="flex flex-col items-center justify-center h-full">
@@ -770,6 +917,7 @@ export default function App() {
                   {/* Detail panel (slide-in) */}
                   {selectedMod && (
                     <ModDetail
+                      currentGame={currentGame}
                       mod={selectedMod}
                       allMods={mods}
                       onClose={() => setSelectedMod(null)}
@@ -788,7 +936,7 @@ export default function App() {
                     {!gamePath ? (
                       <div className="flex flex-col items-center justify-center h-full text-gray-400">
                         <FolderOpen size={40} className="mb-3" />
-                        <p className="text-sm font-medium mb-2">未检测到游戏路径</p>
+                        <p className="text-sm font-medium mb-2">未检测到 {currentGame.displayName} 的游戏路径</p>
                         <button onClick={handleSelectGamePath}
                           className="px-3 py-1.5 bg-gray-900 text-white rounded-lg text-xs">选择游戏目录</button>
                       </div>
@@ -824,6 +972,7 @@ export default function App() {
                   {/* Right: Detail panel (always visible) */}
                   {selectedMod ? (
                     <ModDetail
+                      currentGame={currentGame}
                       mod={selectedMod}
                       allMods={mods}
                       onClose={() => setSelectedMod(null)}
@@ -844,16 +993,18 @@ export default function App() {
             </>
           )}
 
-          {page === 'saves' && <SaveManager />}
           {page === 'nexus' && (
             <NexusBrowser
+              key={currentGame?.nexusDomain || 'no-game'}
+              currentGame={currentGame}
               onNavigate={handleNavigate}
               onRefreshMods={refreshMods}
               onShowToast={showToast}
               onNexusDownloadStatusChange={setDownloadStatus}
             />
           )}
-          {page === 'logs' && <LogViewer />}
+          {page === 'saves' && currentGame?.savesEnabled && <SaveManager />}
+          {page === 'logs' && currentGame?.logsEnabled && <LogViewer />}
           {page === 'settings' && (
             <Settings
               activeTab={settingsTab}
@@ -967,7 +1118,7 @@ export default function App() {
               )}
             </div>
             <div className="px-6 py-4 border-t border-gray-100 flex gap-2">
-              <button onClick={() => { setCrashReport(null); setPage('logs'); }}
+              <button onClick={() => { setCrashReport(null); handleNavigate('logs'); }}
                 className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-colors">
                 查看完整日志
               </button>
@@ -1012,6 +1163,15 @@ export default function App() {
         status={downloadStatus}
         onClose={clearDownloadStatus}
       />
+
+      {showGameSelector && (
+        <GameSelector
+          mode="modal"
+          currentGame={currentGame}
+          onGameSelected={handleGameSelected}
+          onClose={() => setShowGameSelector(false)}
+        />
+      )}
 
       {/* Toast */}
       {toast && (

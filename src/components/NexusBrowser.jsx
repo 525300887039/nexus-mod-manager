@@ -228,11 +228,14 @@ function NexusModCard({ mod, translationEntry, translating, onClick, onTranslate
 }
 
 export default function NexusBrowser({
+  currentGame,
   onNavigate,
   onRefreshMods,
   onShowToast,
   onNexusDownloadStatusChange,
 }) {
+  const gameDomain = currentGame?.nexusDomain || '';
+  const gameDisplayName = currentGame?.displayName || '当前游戏';
   const nexusSupported = hasNexusBrowserSupport();
   const [apiKey, setApiKey] = useState('');
   const [initializing, setInitializing] = useState(true);
@@ -644,7 +647,11 @@ export default function NexusBrowser({
     setOpeningLink(true);
 
     try {
-      const parsed = parseNexusModUrl(rawValue);
+      if (!gameDomain) {
+        throw new Error('请先选择当前管理的游戏');
+      }
+
+      const parsed = parseNexusModUrl(rawValue, gameDomain);
       const mod = await window.api.nexusGetMod(parsed.modId);
 
       setLinkInput(parsed.canonicalUrl);
@@ -715,7 +722,7 @@ export default function NexusBrowser({
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Nexus 浏览</h1>
               <p className="mt-1 text-sm text-gray-500">
-                浏览 Slay the Spire 2 在 Nexus Mods 上的热门、新增、最近更新，以及网页热门分页内容。
+                浏览 {gameDisplayName} 在 Nexus Mods 上的热门、新增、最近更新，以及网页热门分页内容。
               </p>
             </div>
             {nexusSupported && (
@@ -748,7 +755,7 @@ export default function NexusBrowser({
                 <div>
                   <p className="text-sm font-semibold text-gray-900">通过链接打开 Mod</p>
                   <p className="mt-1 text-xs leading-5 text-gray-500">
-                    直接粘贴 Slay the Spire 2 的 Nexus Mod 地址，应用会先跳到详情面板，再继续现有下载安装流程。
+                    直接粘贴 {gameDisplayName} 的 Nexus Mod 地址，应用会先跳到详情面板，再继续现有下载安装流程。
                   </p>
                 </div>
                 {!hasApiKey && (
@@ -775,7 +782,9 @@ export default function NexusBrowser({
                         setLinkError('');
                       }
                     }}
-                    placeholder="粘贴 https://www.nexusmods.com/slaythespire2/mods/123 或文件页链接"
+                    placeholder={gameDomain
+                      ? `粘贴 https://www.nexusmods.com/${gameDomain}/mods/123 或文件页链接`
+                      : '粘贴 Nexus Mods 页面链接'}
                     disabled={openingLink}
                     className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-900 outline-none transition-colors focus:border-gray-900 focus:ring-2 focus:ring-gray-900/5 disabled:cursor-not-allowed disabled:bg-gray-50"
                   />
@@ -797,7 +806,7 @@ export default function NexusBrowser({
               )}
 
               <p className="mt-3 text-xs leading-5 text-gray-400">
-                支持 Mod 页面链接和带 `file_id` 的文件页链接；仅接受 Slay the Spire 2 的 Nexus Mods 地址。
+                支持 Mod 页面链接和带 `file_id` 的文件页链接；仅接受当前所选游戏的 Nexus Mods 地址。
               </p>
             </div>
           )}
@@ -809,7 +818,7 @@ export default function NexusBrowser({
               </div>
               <h2 className="mt-5 text-xl font-semibold text-gray-900">当前运行环境不支持 Nexus 浏览</h2>
               <p className="mx-auto mt-3 max-w-2xl text-sm leading-6 text-gray-600">
-                这个页面依赖 Tauri 侧的 Nexus Mods bridge。你当前打开的是 Electron 运行时，它没有接入这些 API，因此这里只显示只读提示，避免进入页面后直接报错。
+                这个页面依赖 Tauri 侧的 Nexus Mods bridge。当前运行环境未接入相关 API，因此这里只显示只读提示，避免进入页面后直接报错。
               </p>
             </div>
           ) : initializing ? (
@@ -1023,6 +1032,7 @@ export default function NexusBrowser({
       {selectedMod && (
         <NexusModDetail
           mod={selectedMod}
+          currentGame={currentGame}
           initialFileId={selectedFileId}
           translationEntry={translations[getNexusTranslationKey(selectedMod.modId)]}
           onClose={handleCloseSelectedMod}

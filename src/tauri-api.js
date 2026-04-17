@@ -1,5 +1,4 @@
-// Tauri API bridge - replaces Electron's preload.js
-// Provides the same window.api interface using Tauri invoke
+// Tauri API bridge — provides window.api interface using Tauri invoke
 
 const { invoke } = window.__TAURI__.core;
 const { getCurrentWindow } = window.__TAURI__.window;
@@ -54,8 +53,26 @@ function startGameStatePolling() {
 
 window.api = {
   // App
+  /**
+   * @returns {Promise<{
+   *   gamePath: string | null,
+   *   modsDir: string | null,
+   *   currentGame: {
+   *     nexusDomain: string,
+   *     displayName: string,
+   *     savesEnabled: boolean,
+   *     logsEnabled: boolean,
+   *     crashAnalysisEnabled: boolean,
+   *   } | null,
+   *   availableGames: Array<object>,
+   * }>}
+   */
   init: () => invoke('app_init'),
   selectGamePath: () => invoke('app_select_game_path'),
+  listGames: () => invoke('config_list_games'),
+  switchGame: (domain) => invoke('config_switch_game', { nexusDomain: domain }),
+  addGame: (profile, gamePath) => invoke('config_add_game', { profile, gamePath }),
+  removeGame: (domain) => invoke('config_remove_game', { nexusDomain: domain }),
 
   // Window
   minimize: () => invoke('window_minimize'),
