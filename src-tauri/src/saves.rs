@@ -1,3 +1,8 @@
+use crate::{
+    app_paths,
+    game_profile::{preset_games, GameProfile},
+    AppState,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
@@ -77,9 +82,25 @@ fn get_appdata() -> Option<PathBuf> {
     dirs::config_dir()
 }
 
-fn get_steam_user_dir() -> Option<PathBuf> {
+fn current_profile(state: &tauri::State<'_, AppState>) -> Option<GameProfile> {
+    state
+        .current_profile
+        .lock()
+        .ok()
+        .and_then(|profile| profile.clone())
+}
+
+fn default_game_domain() -> Option<String> {
+    preset_games()
+        .into_iter()
+        .next()
+        .map(|profile| profile.nexus_domain)
+}
+
+fn get_steam_user_dir(profile: &GameProfile) -> Option<PathBuf> {
     let appdata = get_appdata()?;
-    let steam_dir = appdata.join("SlayTheSpire2").join("steam");
+    let appdata_dir_name = profile.appdata_dir_name.as_deref()?;
+    let steam_dir = appdata.join(appdata_dir_name).join("steam");
     if !steam_dir.exists() {
         return None;
     }
@@ -99,11 +120,124 @@ fn get_steam_user_dir() -> Option<PathBuf> {
     Some(users[0].path())
 }
 
-fn get_save_backup_dir() -> PathBuf {
-    let appdata = get_appdata().unwrap_or_else(|| PathBuf::from("."));
-    let dir = appdata.join("STS2ModManager").join("save_backups");
+fn get_save_backup_dir(profile: &GameProfile) -> PathBuf {
+    let dir = app_paths::writable_config_dir()
+        .join("save_backups")
+        .join(&profile.nexus_domain);
     let _ = fs::create_dir_all(&dir);
     dir
+}
+
+fn legacy_save_backup_dirs(profile: &GameProfile) -> Vec<PathBuf> {
+    if default_game_domain().as_deref() != Some(profile.nexus_domain.as_str()) {
+        return Vec::new();
+    }
+
+    let mut dirs = Vec::new();
+    for root in [
+        app_paths::current_config_dir(),
+        app_paths::legacy_config_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|dir| dir.join("save_backups"))
+    {
+        if root.exists() && !dirs.iter().any(|path: &PathBuf| path == &root) {
+            dirs.push(root);
+        }
+    }
+
+    dirs
+}
+
+fn unique_backup_path(dir: &Path, file_name: &str) -> PathBuf {
+    let candidate = dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let file_path = Path::new(file_name);
+    let stem = file_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("backup");
+    let ext = file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("");
+
+    for index in 1.. {
+        let name = if ext.is_empty() {
+            format!("{stem}_{index}")
+        } else {
+            format!("{stem}_{index}.{ext}")
+        };
+        let candidate = dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("backup path generator exhausted");
+}
+
+fn migrate_legacy_backups(profile: &GameProfile) -> PathBuf {
+    let backup_dir = get_save_backup_dir(profile);
+
+    for legacy_dir in legacy_save_backup_dirs(profile) {
+        for entry in fs::read_dir(&legacy_dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
+                continue;
+            }
+
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let target = unique_backup_path(&backup_dir, &file_name);
+            let _ = fs::rename(&path, &target).or_else(|_| {
+                fs::copy(&path, &target)?;
+                fs::remove_file(&path)
+            });
+        }
+    }
+
+    backup_dir
+}
+
+fn collect_backups(backup_dir: &Path) -> Vec<BackupEntry> {
+    let mut backups = Vec::new();
+    if let Ok(entries) = fs::read_dir(backup_dir) {
+        let mut bk_files: Vec<_> = entries
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .map(|s| s.ends_with(".zip"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        bk_files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        for entry in bk_files {
+            if let Ok(meta) = entry.metadata() {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| chrono_from_timestamp(d.as_secs() as i64))
+                    .unwrap_or_default();
+                backups.push(BackupEntry {
+                    name: entry.file_name().to_string_lossy().to_string(),
+                    path: entry.path().to_string_lossy().to_string(),
+                    size: meta.len(),
+                    time: mtime,
+                });
+            }
+        }
+    }
+
+    backups
 }
 
 const CHARACTER_NAMES: &[(&str, &str)] = &[
@@ -313,8 +447,21 @@ fn timestamp_string() -> String {
 }
 
 #[tauri::command]
-pub fn saves_scan() -> SavesResult {
-    let user_dir = match get_steam_user_dir() {
+pub fn saves_scan(state: tauri::State<'_, AppState>) -> SavesResult {
+    let Some(profile) = current_profile(&state) else {
+        return SavesResult {
+            slots: vec![],
+            backups: vec![],
+        };
+    };
+    if !profile.saves_enabled {
+        return SavesResult {
+            slots: vec![],
+            backups: vec![],
+        };
+    }
+
+    let user_dir = match get_steam_user_dir(&profile) {
         Some(d) => d,
         None => {
             return SavesResult {
@@ -334,38 +481,8 @@ pub fn saves_scan() -> SavesResult {
         }
     }
 
-    let backup_dir = get_save_backup_dir();
-    let mut backups = Vec::new();
-    if backup_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&backup_dir) {
-            let mut bk_files: Vec<_> = entries
-                .flatten()
-                .filter(|e| {
-                    e.file_name()
-                        .to_str()
-                        .map(|s| s.ends_with(".zip"))
-                        .unwrap_or(false)
-                })
-                .collect();
-            bk_files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
-            for entry in bk_files {
-                if let Ok(meta) = entry.metadata() {
-                    let mtime = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| chrono_from_timestamp(d.as_secs() as i64))
-                        .unwrap_or_default();
-                    backups.push(BackupEntry {
-                        name: entry.file_name().to_string_lossy().to_string(),
-                        path: entry.path().to_string_lossy().to_string(),
-                        size: meta.len(),
-                        time: mtime,
-                    });
-                }
-            }
-        }
-    }
+    let backup_dir = migrate_legacy_backups(&profile);
+    let backups = collect_backups(&backup_dir);
 
     SavesResult { slots, backups }
 }
@@ -411,8 +528,22 @@ pub struct SaveExportOpts {
 pub async fn saves_export(
     app: tauri::AppHandle,
     opts: SaveExportOpts,
+    state: tauri::State<'_, AppState>,
 ) -> Result<SimpleResult, String> {
-    let user_dir = match get_steam_user_dir() {
+    let Some(profile) = current_profile(&state) else {
+        return Ok(SimpleResult {
+            success: false,
+            error: Some("No game selected".into()),
+        });
+    };
+    if !profile.saves_enabled {
+        return Ok(SimpleResult {
+            success: false,
+            error: Some("Save management is disabled for the current game".into()),
+        });
+    }
+
+    let user_dir = match get_steam_user_dir(&profile) {
         Some(d) => d,
         None => {
             return Ok(SimpleResult {
@@ -440,7 +571,7 @@ pub async fn saves_export(
         opts.slot.clone()
     };
     let ts = timestamp_string();
-    let default_name = format!("STS2_Save_{}_{}.zip", tag, ts);
+    let default_name = format!("Save_{}_{}.zip", tag, ts);
 
     let dialog = app.dialog();
     let save_path = dialog
@@ -496,8 +627,22 @@ pub async fn saves_export(
 pub async fn saves_import(
     app: tauri::AppHandle,
     opts: SaveExportOpts,
+    state: tauri::State<'_, AppState>,
 ) -> Result<SimpleResult, String> {
-    let user_dir = match get_steam_user_dir() {
+    let Some(profile) = current_profile(&state) else {
+        return Ok(SimpleResult {
+            success: false,
+            error: Some("No game selected".into()),
+        });
+    };
+    if !profile.saves_enabled {
+        return Ok(SimpleResult {
+            success: false,
+            error: Some("Save management is disabled for the current game".into()),
+        });
+    }
+
+    let user_dir = match get_steam_user_dir(&profile) {
         Some(d) => d,
         None => {
             return Ok(SimpleResult {
@@ -532,7 +677,7 @@ pub async fn saves_import(
 
     // Backup current slot
     if target_dir.exists() {
-        let backup_dir = get_save_backup_dir();
+        let backup_dir = migrate_legacy_backups(&profile);
         let tag = if opts.modded {
             format!("{}_modded", opts.slot)
         } else {

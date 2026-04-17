@@ -1,4 +1,6 @@
-use crate::{config, mods, nexus_api::NexusModInfo, AppState};
+use crate::{
+    app_paths, config, game_profile::preset_games, mods, nexus_api::NexusModInfo, AppState,
+};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -98,22 +100,123 @@ impl From<NexusModCacheRow> for NexusModInfo {
     }
 }
 
+#[allow(unreachable_code)]
 fn app_data_dir() -> Result<PathBuf, String> {
+    let dir = app_paths::writable_data_dir();
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create app data dir {}: {}", dir.display(), e))?;
+    return Ok(dir);
+
     let base = dirs::data_dir().ok_or_else(|| "无法解析应用数据目录".to_string())?;
-    let dir = base.join("STS2ModManager");
+    let dir = base.join("NexusModManager");
     fs::create_dir_all(&dir)
         .map_err(|e| format!("无法创建应用数据目录 {}: {}", dir.display(), e))?;
     Ok(dir)
 }
 
 pub(crate) fn cache_db_path() -> Result<PathBuf, String> {
+    let current_path = app_paths::current_data_file("cache.db");
+    if current_path.exists() {
+        return Ok(current_path);
+    }
+
+    if let Some(legacy_path) =
+        app_paths::existing_data_file("cache.db").filter(|path| *path != current_path)
+    {
+        if let Some(parent) = current_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create db dir {}: {}", parent.display(), e))?;
+        }
+
+        if let Err(err) = fs::copy(&legacy_path, &current_path) {
+            eprintln!(
+                "failed to migrate legacy cache db {} -> {}: {}",
+                legacy_path.display(),
+                current_path.display(),
+                err
+            );
+            return Ok(legacy_path);
+        }
+
+        return Ok(current_path);
+    }
+
     Ok(app_data_dir()?.join("cache.db"))
 }
 
 fn legacy_translations_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    for dir in [
+        app_paths::current_config_dir(),
+        app_paths::legacy_config_dir(),
+        app_paths::current_data_dir(),
+        app_paths::legacy_data_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let candidate = dir.join("translations.json");
+        if !candidates.iter().any(|path: &PathBuf| path == &candidate) {
+            candidates.push(candidate);
+        }
+    }
+
+    if let Some(existing) = candidates.into_iter().find(|path| path.exists()) {
+        return Some(existing);
+    }
+
     dirs::config_dir()
         .or_else(dirs::data_dir)
-        .map(|base| base.join("STS2ModManager").join("translations.json"))
+        .map(|base| base.join("NexusModManager").join("translations.json"))
+}
+
+fn default_game_domain() -> String {
+    preset_games()
+        .into_iter()
+        .next()
+        .map(|profile| profile.nexus_domain)
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn current_game_domain(state: &tauri::State<'_, AppState>) -> Result<String, String> {
+    state
+        .current_profile
+        .lock()
+        .map_err(|e| format!("game profile lock poisoned: {}", e))?
+        .as_ref()
+        .map(|profile| profile.nexus_domain.clone())
+        .ok_or_else(|| "please select a game first".to_string())
+}
+
+fn table_info(db: &Connection, table: &str) -> Result<Vec<(String, i64)>, String> {
+    let mut stmt = db
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("failed to inspect table {table}: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+        })
+        .map_err(|e| format!("failed to read table info for {table}: {}", e))?;
+
+    let mut columns = Vec::new();
+    for row in rows {
+        columns.push(row.map_err(|e| format!("failed to decode table info for {table}: {}", e))?);
+    }
+    Ok(columns)
+}
+
+fn has_composite_primary_key(columns: &[(String, i64)], expected: &[&str]) -> bool {
+    expected.iter().enumerate().all(|(index, expected_name)| {
+        columns
+            .iter()
+            .any(|(name, pk)| name == expected_name && *pk == index as i64 + 1)
+    })
+}
+
+fn has_column(columns: &[(String, i64)], expected_name: &str) -> bool {
+    columns
+        .iter()
+        .any(|(name, _)| name.as_str() == expected_name)
 }
 
 fn legacy_backup_path(path: &Path) -> PathBuf {
@@ -141,6 +244,7 @@ fn normalize_optional_text(value: Option<&str>) -> Option<String> {
 
 fn upsert_translation_row(
     db: &Connection,
+    game_domain: &str,
     source_text: &str,
     translated: &str,
     provider: &str,
@@ -161,13 +265,13 @@ fn upsert_translation_row(
 
     let now = now_millis();
     db.execute(
-        "INSERT INTO translations (source_text, translated, provider, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)
-         ON CONFLICT(source_text) DO UPDATE SET
+        "INSERT INTO translations (game_domain, source_text, translated, provider, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+         ON CONFLICT(game_domain, source_text) DO UPDATE SET
            translated = excluded.translated,
            provider = excluded.provider,
            updated_at = excluded.updated_at",
-        params![source_text, translated, provider, now],
+        params![game_domain, source_text, translated, provider, now],
     )
     .map_err(|e| format!("写入翻译缓存失败: {}", e))?;
 
@@ -187,6 +291,7 @@ fn build_mod_source_lookup(game_path: &str) -> HashMap<String, (Option<String>, 
 
 pub(crate) fn saved_translation_upsert_db(
     db: &Connection,
+    game_domain: &str,
     mod_id: &str,
     name_translated: Option<&str>,
     desc_translated: Option<&str>,
@@ -210,6 +315,7 @@ pub(crate) fn saved_translation_upsert_db(
     let now = now_millis();
     db.execute(
         "INSERT INTO saved_translations (
+           game_domain,
            mod_id,
            name_translated,
            desc_translated,
@@ -217,14 +323,15 @@ pub(crate) fn saved_translation_upsert_db(
            source_desc,
            updated_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(mod_id) DO UPDATE SET
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(game_domain, mod_id) DO UPDATE SET
            name_translated = COALESCE(excluded.name_translated, saved_translations.name_translated),
            desc_translated = COALESCE(excluded.desc_translated, saved_translations.desc_translated),
            source_name = COALESCE(excluded.source_name, saved_translations.source_name),
            source_desc = COALESCE(excluded.source_desc, saved_translations.source_desc),
            updated_at = excluded.updated_at",
         params![
+            game_domain,
             mod_id,
             name_translated.as_deref(),
             desc_translated.as_deref(),
@@ -240,15 +347,17 @@ pub(crate) fn saved_translation_upsert_db(
 
 pub(crate) fn saved_translations_load_db(
     db: &Connection,
+    game_domain: &str,
 ) -> Result<HashMap<String, SavedTranslationRow>, String> {
     let mut stmt = db
         .prepare(
             "SELECT mod_id, name_translated, desc_translated, source_name, source_desc
-             FROM saved_translations",
+             FROM saved_translations
+             WHERE game_domain = ?1",
         )
         .map_err(|e| format!("准备已保存翻译查询失败: {}", e))?;
     let rows = stmt
-        .query_map([], |row| {
+        .query_map([game_domain], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 SavedTranslationRow {
@@ -272,6 +381,7 @@ pub(crate) fn saved_translations_load_db(
 
 pub(crate) fn nexus_saved_translation_upsert_db(
     db: &Connection,
+    game_domain: &str,
     mod_key: &str,
     name_translated: Option<&str>,
     desc_translated: Option<&str>,
@@ -291,17 +401,19 @@ pub(crate) fn nexus_saved_translation_upsert_db(
     let now = now_millis();
     db.execute(
         "INSERT INTO nexus_saved_translations (
+           game_domain,
            mod_key,
            name_translated,
            desc_translated,
            updated_at
          )
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(mod_key) DO UPDATE SET
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(game_domain, mod_key) DO UPDATE SET
            name_translated = COALESCE(excluded.name_translated, nexus_saved_translations.name_translated),
            desc_translated = COALESCE(excluded.desc_translated, nexus_saved_translations.desc_translated),
            updated_at = excluded.updated_at",
         params![
+            game_domain,
             mod_key,
             name_translated.as_deref(),
             desc_translated.as_deref(),
@@ -315,15 +427,17 @@ pub(crate) fn nexus_saved_translation_upsert_db(
 
 pub(crate) fn nexus_saved_translations_load_db(
     db: &Connection,
+    game_domain: &str,
 ) -> Result<HashMap<String, NexusSavedTranslationRow>, String> {
     let mut stmt = db
         .prepare(
             "SELECT mod_key, name_translated, desc_translated
-             FROM nexus_saved_translations",
+             FROM nexus_saved_translations
+             WHERE game_domain = ?1",
         )
         .map_err(|e| format!("准备 Nexus 已保存翻译查询失败: {}", e))?;
     let rows = stmt
-        .query_map([], |row| {
+        .query_map([game_domain], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 NexusSavedTranslationRow {
@@ -345,6 +459,7 @@ pub(crate) fn nexus_saved_translations_load_db(
 
 pub(crate) fn nexus_mod_cache_upsert_db(
     db: &Connection,
+    game_domain: &str,
     mods: &[NexusModInfo],
 ) -> Result<(), String> {
     if mods.is_empty() {
@@ -357,12 +472,12 @@ pub(crate) fn nexus_mod_cache_upsert_db(
         let data_json = serde_json::to_string(&NexusModCacheRow::from(mod_info))
             .map_err(|e| format!("序列化 Nexus Mod 缓存失败 ({}): {}", mod_info.mod_id, e))?;
         db.execute(
-            "INSERT INTO nexus_mod_cache (mod_id, data_json, fetched_at)
-             VALUES (?1, ?2, ?3)
-             ON CONFLICT(mod_id) DO UPDATE SET
+            "INSERT INTO nexus_mod_cache (game_domain, mod_id, data_json, fetched_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(game_domain, mod_id) DO UPDATE SET
                data_json = excluded.data_json,
                fetched_at = excluded.fetched_at",
-            params![mod_info.mod_id, data_json, fetched_at],
+            params![game_domain, mod_info.mod_id, data_json, fetched_at],
         )
         .map_err(|e| format!("写入 Nexus Mod 缓存失败 ({}): {}", mod_info.mod_id, e))?;
     }
@@ -370,12 +485,19 @@ pub(crate) fn nexus_mod_cache_upsert_db(
     Ok(())
 }
 
-pub(crate) fn nexus_mod_cache_load_db(db: &Connection) -> Result<Vec<NexusModInfo>, String> {
+pub(crate) fn nexus_mod_cache_load_db(
+    db: &Connection,
+    game_domain: &str,
+) -> Result<Vec<NexusModInfo>, String> {
     let mut stmt = db
-        .prepare("SELECT data_json FROM nexus_mod_cache ORDER BY fetched_at DESC, mod_id DESC")
+        .prepare(
+            "SELECT data_json FROM nexus_mod_cache
+             WHERE game_domain = ?1
+             ORDER BY fetched_at DESC, mod_id DESC",
+        )
         .map_err(|e| format!("准备 Nexus Mod 缓存查询失败: {}", e))?;
     let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([game_domain], |row| row.get::<_, String>(0))
         .map_err(|e| format!("读取 Nexus Mod 缓存失败: {}", e))?;
 
     let mut result = Vec::new();
@@ -391,6 +513,7 @@ pub(crate) fn nexus_mod_cache_load_db(db: &Connection) -> Result<Vec<NexusModInf
 
 pub(crate) fn nexus_mod_cache_get_many_db(
     db: &Connection,
+    game_domain: &str,
     mod_ids: &[u64],
     max_age_millis: Option<i64>,
 ) -> Result<HashMap<u64, NexusModInfo>, String> {
@@ -410,15 +533,16 @@ pub(crate) fn nexus_mod_cache_get_many_db(
             .iter()
             .map(|mod_id| SqlValue::from(*mod_id as i64))
             .collect::<Vec<_>>();
+        params.push(SqlValue::from(game_domain.to_string()));
         let sql = if let Some(fetched_after) = fetched_after {
             params.push(SqlValue::from(fetched_after));
             format!(
-                "SELECT mod_id, data_json FROM nexus_mod_cache WHERE mod_id IN ({}) AND fetched_at >= ?",
+                "SELECT mod_id, data_json FROM nexus_mod_cache WHERE mod_id IN ({}) AND game_domain = ? AND fetched_at >= ?",
                 placeholders
             )
         } else {
             format!(
-                "SELECT mod_id, data_json FROM nexus_mod_cache WHERE mod_id IN ({})",
+                "SELECT mod_id, data_json FROM nexus_mod_cache WHERE mod_id IN ({}) AND game_domain = ?",
                 placeholders
             )
         };
@@ -472,9 +596,11 @@ mod tests {
         let db = Connection::open_in_memory().expect("open in-memory db");
         db.execute_batch(
             "CREATE TABLE nexus_mod_cache (
-                mod_id INTEGER PRIMARY KEY,
+                game_domain TEXT NOT NULL,
+                mod_id INTEGER NOT NULL,
                 data_json TEXT NOT NULL,
-                fetched_at INTEGER NOT NULL
+                fetched_at INTEGER NOT NULL,
+                PRIMARY KEY (game_domain, mod_id)
             );",
         )
         .expect("create nexus_mod_cache table");
@@ -489,23 +615,25 @@ mod tests {
         let fresh_json = serde_json::to_string(&NexusModCacheRow::from(&fresh_mod)).unwrap();
         let stale_json = serde_json::to_string(&NexusModCacheRow::from(&stale_mod)).unwrap();
         let now = now_millis();
+        let game_domain = "game-a";
 
         db.execute(
-            "INSERT INTO nexus_mod_cache (mod_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![1_u64, fresh_json, now],
+            "INSERT INTO nexus_mod_cache (game_domain, mod_id, data_json, fetched_at) VALUES (?1, ?2, ?3, ?4)",
+            params![game_domain, 1_u64, fresh_json, now],
         )
         .unwrap();
         db.execute(
-            "INSERT INTO nexus_mod_cache (mod_id, data_json, fetched_at) VALUES (?1, ?2, ?3)",
-            params![2_u64, stale_json, now - 10_000],
+            "INSERT INTO nexus_mod_cache (game_domain, mod_id, data_json, fetched_at) VALUES (?1, ?2, ?3, ?4)",
+            params![game_domain, 2_u64, stale_json, now - 10_000],
         )
         .unwrap();
 
-        let fresh_only = nexus_mod_cache_get_many_db(&db, &[1, 2], Some(1_000)).unwrap();
+        let fresh_only =
+            nexus_mod_cache_get_many_db(&db, game_domain, &[1, 2], Some(1_000)).unwrap();
         assert!(fresh_only.contains_key(&1));
         assert!(!fresh_only.contains_key(&2));
 
-        let all_rows = nexus_mod_cache_get_many_db(&db, &[1, 2], None).unwrap();
+        let all_rows = nexus_mod_cache_get_many_db(&db, game_domain, &[1, 2], None).unwrap();
         assert!(all_rows.contains_key(&1));
         assert!(all_rows.contains_key(&2));
     }
@@ -513,9 +641,10 @@ mod tests {
 
 pub(crate) fn sync_saved_translations_with_game_path_db(
     db: &mut Connection,
+    game_domain: &str,
     game_path: &str,
 ) -> Result<(), String> {
-    let saved_rows = saved_translations_load_db(db)?;
+    let saved_rows = saved_translations_load_db(db, game_domain)?;
     if saved_rows.is_empty() {
         return Ok(());
     }
@@ -539,18 +668,19 @@ pub(crate) fn sync_saved_translations_with_game_path_db(
         if let (Some(source_text), Some(translated)) =
             (source_name.as_deref(), saved_row.name_translated.as_deref())
         {
-            upsert_translation_row(&tx, source_text, translated, "compat")?;
+            upsert_translation_row(&tx, game_domain, source_text, translated, "compat")?;
         }
 
         if let (Some(source_text), Some(translated)) =
             (source_desc.as_deref(), saved_row.desc_translated.as_deref())
         {
-            upsert_translation_row(&tx, source_text, translated, "compat")?;
+            upsert_translation_row(&tx, game_domain, source_text, translated, "compat")?;
         }
 
         if source_name_changed || source_desc_changed {
             saved_translation_upsert_db(
                 &tx,
+                game_domain,
                 &mod_id,
                 saved_row.name_translated.as_deref(),
                 saved_row.desc_translated.as_deref(),
@@ -568,6 +698,7 @@ pub(crate) fn sync_saved_translations_with_game_path_db(
 
 pub(crate) fn translation_cache_get_db(
     db: &Connection,
+    game_domain: &str,
     source_text: &str,
 ) -> Result<Option<String>, String> {
     let source_text = source_text.trim();
@@ -576,8 +707,8 @@ pub(crate) fn translation_cache_get_db(
     }
 
     db.query_row(
-        "SELECT translated FROM translations WHERE source_text = ?1",
-        [source_text],
+        "SELECT translated FROM translations WHERE game_domain = ?1 AND source_text = ?2",
+        params![game_domain, source_text],
         |row| row.get::<_, String>(0),
     )
     .optional()
@@ -586,15 +717,17 @@ pub(crate) fn translation_cache_get_db(
 
 pub(crate) fn translation_cache_set_db(
     db: &Connection,
+    game_domain: &str,
     source_text: &str,
     translated: &str,
     provider: &str,
 ) -> Result<(), String> {
-    upsert_translation_row(db, source_text, translated, provider)
+    upsert_translation_row(db, game_domain, source_text, translated, provider)
 }
 
 pub(crate) fn translation_cache_batch_get_db(
     db: &Connection,
+    game_domain: &str,
     texts: Vec<String>,
 ) -> Result<HashMap<String, String>, String> {
     let mut seen = HashSet::new();
@@ -624,14 +757,19 @@ pub(crate) fn translation_cache_batch_get_db(
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT source_text, translated FROM translations WHERE source_text IN ({})",
+            "SELECT source_text, translated FROM translations WHERE source_text IN ({}) AND game_domain = ?",
             placeholders
         );
         let mut stmt = db
             .prepare(&sql)
             .map_err(|e| format!("准备批量查询失败: {}", e))?;
+        let mut params = chunk
+            .iter()
+            .map(|text| SqlValue::from(text.clone()))
+            .collect::<Vec<_>>();
+        params.push(SqlValue::from(game_domain.to_string()));
         let rows = stmt
-            .query_map(params_from_iter(chunk.iter()), |row| {
+            .query_map(params_from_iter(params.iter()), |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|e| format!("执行批量查询失败: {}", e))?;
@@ -646,55 +784,244 @@ pub(crate) fn translation_cache_batch_get_db(
     Ok(results)
 }
 
-pub(crate) fn translation_cache_count_db(db: &Connection) -> Result<u64, String> {
+pub(crate) fn translation_cache_count_db(
+    db: &Connection,
+    game_domain: &str,
+) -> Result<u64, String> {
     let count: i64 = db
-        .query_row("SELECT COUNT(*) FROM translations", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM translations WHERE game_domain = ?1",
+            [game_domain],
+            |row| row.get(0),
+        )
         .map_err(|e| format!("统计翻译缓存失败: {}", e))?;
 
     u64::try_from(count).map_err(|_| format!("缓存条目数量异常: {}", count))
 }
 
-pub(crate) fn translation_cache_clear_db(db: &Connection) -> Result<(), String> {
-    db.execute("DELETE FROM translations", [])
-        .map_err(|e| format!("清空翻译缓存失败: {}", e))?;
+pub(crate) fn translation_cache_clear_db(db: &Connection, game_domain: &str) -> Result<(), String> {
+    db.execute(
+        "DELETE FROM translations WHERE game_domain = ?1",
+        [game_domain],
+    )
+    .map_err(|e| format!("清空翻译缓存失败: {}", e))?;
+    Ok(())
+}
+
+fn migrate_translations_table(db: &mut Connection) -> Result<(), String> {
+    let columns = table_info(db, "translations")?;
+    let legacy_domain = default_game_domain();
+    if has_column(&columns, "game_domain")
+        && has_composite_primary_key(&columns, &["game_domain", "source_text"])
+    {
+        return Ok(());
+    }
+
+    let insert_select = if has_column(&columns, "game_domain") {
+        "SELECT game_domain, source_text, translated, provider, created_at, updated_at FROM translations_legacy".to_string()
+    } else {
+        format!(
+            "SELECT '{}', source_text, translated, provider, created_at, updated_at FROM translations_legacy",
+            legacy_domain
+        )
+    };
+
+    let tx = db
+        .transaction()
+        .map_err(|e| format!("failed to start translations migration: {}", e))?;
+    tx.execute_batch(&format!(
+        "ALTER TABLE translations RENAME TO translations_legacy;
+         CREATE TABLE translations (
+           game_domain TEXT NOT NULL DEFAULT 'slaythespire2',
+           source_text TEXT NOT NULL,
+           translated TEXT NOT NULL,
+           provider TEXT NOT NULL,
+           created_at INTEGER NOT NULL,
+           updated_at INTEGER NOT NULL,
+           PRIMARY KEY (game_domain, source_text)
+         );
+         INSERT INTO translations (game_domain, source_text, translated, provider, created_at, updated_at)
+         {insert_select};
+         DROP TABLE translations_legacy;"
+    ))
+    .map_err(|e| format!("failed to migrate translations table: {}", e))?;
+    tx.commit()
+        .map_err(|e| format!("failed to commit translations migration: {}", e))
+}
+
+fn migrate_saved_translations_table(db: &mut Connection) -> Result<(), String> {
+    let columns = table_info(db, "saved_translations")?;
+    let legacy_domain = default_game_domain();
+    if has_column(&columns, "game_domain")
+        && has_composite_primary_key(&columns, &["game_domain", "mod_id"])
+    {
+        return Ok(());
+    }
+
+    let insert_select = if has_column(&columns, "game_domain") {
+        "SELECT game_domain, mod_id, name_translated, desc_translated, source_name, source_desc, updated_at FROM saved_translations_legacy".to_string()
+    } else {
+        format!(
+            "SELECT '{}', mod_id, name_translated, desc_translated, source_name, source_desc, updated_at FROM saved_translations_legacy",
+            legacy_domain
+        )
+    };
+
+    let tx = db
+        .transaction()
+        .map_err(|e| format!("failed to start saved_translations migration: {}", e))?;
+    tx.execute_batch(&format!(
+        "ALTER TABLE saved_translations RENAME TO saved_translations_legacy;
+         CREATE TABLE saved_translations (
+           game_domain TEXT NOT NULL DEFAULT 'slaythespire2',
+           mod_id TEXT NOT NULL,
+           name_translated TEXT,
+           desc_translated TEXT,
+           source_name TEXT,
+           source_desc TEXT,
+           updated_at INTEGER NOT NULL,
+           PRIMARY KEY (game_domain, mod_id)
+         );
+         INSERT INTO saved_translations (game_domain, mod_id, name_translated, desc_translated, source_name, source_desc, updated_at)
+         {insert_select};
+         DROP TABLE saved_translations_legacy;"
+    ))
+    .map_err(|e| format!("failed to migrate saved_translations table: {}", e))?;
+    tx.commit()
+        .map_err(|e| format!("failed to commit saved_translations migration: {}", e))
+}
+
+fn migrate_nexus_saved_translations_table(db: &mut Connection) -> Result<(), String> {
+    let columns = table_info(db, "nexus_saved_translations")?;
+    let legacy_domain = default_game_domain();
+    if has_column(&columns, "game_domain")
+        && has_composite_primary_key(&columns, &["game_domain", "mod_key"])
+    {
+        return Ok(());
+    }
+
+    let insert_select = if has_column(&columns, "game_domain") {
+        "SELECT game_domain, mod_key, name_translated, desc_translated, updated_at FROM nexus_saved_translations_legacy".to_string()
+    } else {
+        format!(
+            "SELECT '{}', mod_key, name_translated, desc_translated, updated_at FROM nexus_saved_translations_legacy",
+            legacy_domain
+        )
+    };
+
+    let tx = db
+        .transaction()
+        .map_err(|e| format!("failed to start nexus_saved_translations migration: {}", e))?;
+    tx.execute_batch(&format!(
+        "ALTER TABLE nexus_saved_translations RENAME TO nexus_saved_translations_legacy;
+         CREATE TABLE nexus_saved_translations (
+           game_domain TEXT NOT NULL DEFAULT 'slaythespire2',
+           mod_key TEXT NOT NULL,
+           name_translated TEXT,
+           desc_translated TEXT,
+           updated_at INTEGER NOT NULL,
+           PRIMARY KEY (game_domain, mod_key)
+         );
+         INSERT INTO nexus_saved_translations (game_domain, mod_key, name_translated, desc_translated, updated_at)
+         {insert_select};
+         DROP TABLE nexus_saved_translations_legacy;"
+    ))
+    .map_err(|e| format!("failed to migrate nexus_saved_translations table: {}", e))?;
+    tx.commit()
+        .map_err(|e| format!("failed to commit nexus_saved_translations migration: {}", e))
+}
+
+fn migrate_nexus_mod_cache_table(db: &mut Connection) -> Result<(), String> {
+    let columns = table_info(db, "nexus_mod_cache")?;
+    let legacy_domain = default_game_domain();
+    if has_column(&columns, "game_domain")
+        && has_composite_primary_key(&columns, &["game_domain", "mod_id"])
+    {
+        return Ok(());
+    }
+
+    let insert_select = if has_column(&columns, "game_domain") {
+        "SELECT game_domain, mod_id, data_json, fetched_at FROM nexus_mod_cache_legacy".to_string()
+    } else {
+        format!(
+            "SELECT '{}', mod_id, data_json, fetched_at FROM nexus_mod_cache_legacy",
+            legacy_domain
+        )
+    };
+
+    let tx = db
+        .transaction()
+        .map_err(|e| format!("failed to start nexus_mod_cache migration: {}", e))?;
+    tx.execute_batch(&format!(
+        "ALTER TABLE nexus_mod_cache RENAME TO nexus_mod_cache_legacy;
+         CREATE TABLE nexus_mod_cache (
+           game_domain TEXT NOT NULL DEFAULT 'slaythespire2',
+           mod_id INTEGER NOT NULL,
+           data_json TEXT NOT NULL,
+           fetched_at INTEGER NOT NULL,
+           PRIMARY KEY (game_domain, mod_id)
+         );
+         INSERT INTO nexus_mod_cache (game_domain, mod_id, data_json, fetched_at)
+         {insert_select};
+         DROP TABLE nexus_mod_cache_legacy;"
+    ))
+    .map_err(|e| format!("failed to migrate nexus_mod_cache table: {}", e))?;
+    tx.commit()
+        .map_err(|e| format!("failed to commit nexus_mod_cache migration: {}", e))
+}
+
+fn ensure_game_scoped_tables(db: &mut Connection) -> Result<(), String> {
+    migrate_translations_table(db)?;
+    migrate_saved_translations_table(db)?;
+    migrate_nexus_saved_translations_table(db)?;
+    migrate_nexus_mod_cache_table(db)?;
     Ok(())
 }
 
 pub fn init_db(_app_handle: &tauri::AppHandle) -> Result<Connection, String> {
     let db_path = cache_db_path()?;
-    let db = Connection::open(&db_path)
+    let mut db = Connection::open(&db_path)
         .map_err(|e| format!("无法打开数据库 {}: {}", db_path.display(), e))?;
 
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS translations (
-           source_text TEXT PRIMARY KEY,
+           game_domain TEXT NOT NULL DEFAULT 'slaythespire2',
+           source_text TEXT NOT NULL,
            translated TEXT NOT NULL,
            provider TEXT NOT NULL,
            created_at INTEGER NOT NULL,
-           updated_at INTEGER NOT NULL
+           updated_at INTEGER NOT NULL,
+           PRIMARY KEY (game_domain, source_text)
          );
          CREATE TABLE IF NOT EXISTS saved_translations (
-           mod_id TEXT PRIMARY KEY,
+           game_domain TEXT NOT NULL DEFAULT 'slaythespire2',
+           mod_id TEXT NOT NULL,
            name_translated TEXT,
            desc_translated TEXT,
            source_name TEXT,
            source_desc TEXT,
-           updated_at INTEGER NOT NULL
+           updated_at INTEGER NOT NULL,
+           PRIMARY KEY (game_domain, mod_id)
          );
          CREATE TABLE IF NOT EXISTS nexus_saved_translations (
-           mod_key TEXT PRIMARY KEY,
+           game_domain TEXT NOT NULL DEFAULT 'slaythespire2',
+           mod_key TEXT NOT NULL,
            name_translated TEXT,
            desc_translated TEXT,
-           updated_at INTEGER NOT NULL
+           updated_at INTEGER NOT NULL,
+           PRIMARY KEY (game_domain, mod_key)
          );
          CREATE TABLE IF NOT EXISTS nexus_mod_cache (
-           mod_id INTEGER PRIMARY KEY,
+           game_domain TEXT NOT NULL DEFAULT 'slaythespire2',
+           mod_id INTEGER NOT NULL,
            data_json TEXT NOT NULL,
-           fetched_at INTEGER NOT NULL
+           fetched_at INTEGER NOT NULL,
+           PRIMARY KEY (game_domain, mod_id)
          );",
     )
     .map_err(|e| format!("初始化数据库表失败: {}", e))?;
 
+    ensure_game_scoped_tables(&mut db)?;
     Ok(db)
 }
 
@@ -718,6 +1045,9 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
     let mod_lookup = config::load_or_detect_game_path()
         .map(|game_path| build_mod_source_lookup(&game_path))
         .unwrap_or_default();
+    let game_domain = config::load_current_profile()
+        .map(|profile| profile.nexus_domain)
+        .unwrap_or_else(default_game_domain);
 
     let tx = db
         .transaction()
@@ -726,7 +1056,7 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
     for (key, value) in entries {
         if let Some(translated) = value.as_str() {
             if !key.trim().is_empty() && !translated.trim().is_empty() {
-                upsert_translation_row(&tx, key, translated, "legacy")?;
+                upsert_translation_row(&tx, &game_domain, key, translated, "legacy")?;
             }
             continue;
         }
@@ -740,6 +1070,7 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
 
         saved_translation_upsert_db(
             &tx,
+            &game_domain,
             key,
             name_translated,
             desc_translated,
@@ -750,7 +1081,13 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
         if let Some(translated_name) = name_translated {
             if let Some(source_text) = source_name.as_deref() {
                 if !source_text.trim().is_empty() && !translated_name.trim().is_empty() {
-                    upsert_translation_row(&tx, source_text, translated_name, "legacy")?;
+                    upsert_translation_row(
+                        &tx,
+                        &game_domain,
+                        source_text,
+                        translated_name,
+                        "legacy",
+                    )?;
                 }
             }
         }
@@ -758,7 +1095,13 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
         if let Some(translated_desc) = desc_translated {
             if let Some(source_text) = source_desc.as_deref() {
                 if !source_text.trim().is_empty() && !translated_desc.trim().is_empty() {
-                    upsert_translation_row(&tx, source_text, translated_desc, "legacy")?;
+                    upsert_translation_row(
+                        &tx,
+                        &game_domain,
+                        source_text,
+                        translated_desc,
+                        "legacy",
+                    )?;
                 }
             }
         }
@@ -781,11 +1124,12 @@ pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String
 }
 
 fn collect_nexus_translation_map(state: &tauri::State<'_, AppState>) -> Result<Value, String> {
+    let game_domain = current_game_domain(state)?;
     let db = state
         .db
         .lock()
         .map_err(|e| format!("数据库锁已损坏: {}", e))?;
-    let saved_translations = nexus_saved_translations_load_db(&db)?;
+    let saved_translations = nexus_saved_translations_load_db(&db, &game_domain)?;
     let mut result = Map::new();
 
     for (mod_key, saved_row) in saved_translations {
@@ -811,6 +1155,7 @@ fn persist_nexus_translation_map(
     state: &tauri::State<'_, AppState>,
     data: &Value,
 ) -> Result<(), String> {
+    let game_domain = current_game_domain(state)?;
     let Some(entries) = data.as_object() else {
         return Err("nexus_translations_save 需要对象格式数据".to_string());
     };
@@ -831,6 +1176,7 @@ fn persist_nexus_translation_map(
 
         nexus_saved_translation_upsert_db(
             &db,
+            &game_domain,
             mod_key,
             entry.get("name").and_then(|value| value.as_str()),
             entry.get("desc").and_then(|value| value.as_str()),
@@ -855,7 +1201,8 @@ pub fn translation_cache_get(
     source_text: String,
 ) -> Result<Option<String>, String> {
     let db = lock_db(&state)?;
-    translation_cache_get_db(&db, &source_text)
+    let game_domain = current_game_domain(&state)?;
+    translation_cache_get_db(&db, &game_domain, &source_text)
 }
 
 #[tauri::command]
@@ -866,7 +1213,8 @@ pub fn translation_cache_set(
     provider: String,
 ) -> Result<(), String> {
     let db = lock_db(&state)?;
-    translation_cache_set_db(&db, &source_text, &translated, &provider)
+    let game_domain = current_game_domain(&state)?;
+    translation_cache_set_db(&db, &game_domain, &source_text, &translated, &provider)
 }
 
 #[tauri::command]
@@ -875,19 +1223,22 @@ pub fn translation_cache_batch_get(
     texts: Vec<String>,
 ) -> Result<HashMap<String, String>, String> {
     let db = lock_db(&state)?;
-    translation_cache_batch_get_db(&db, texts)
+    let game_domain = current_game_domain(&state)?;
+    translation_cache_batch_get_db(&db, &game_domain, texts)
 }
 
 #[tauri::command]
 pub fn translation_cache_count(state: tauri::State<'_, AppState>) -> Result<u64, String> {
     let db = lock_db(&state)?;
-    translation_cache_count_db(&db)
+    let game_domain = current_game_domain(&state)?;
+    translation_cache_count_db(&db, &game_domain)
 }
 
 #[tauri::command]
 pub fn translation_cache_clear(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let db = lock_db(&state)?;
-    translation_cache_clear_db(&db)
+    let game_domain = current_game_domain(&state)?;
+    translation_cache_clear_db(&db, &game_domain)
 }
 
 #[tauri::command]
