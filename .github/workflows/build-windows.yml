@@ -49,13 +49,13 @@ jobs:
       - name: Upload portable exe
         uses: actions/upload-artifact@v4
         with:
-          name: STS2-Mod-Manager-Portable
+          name: Nexus-Mod-Manager-Portable
           path: src-tauri/target/release/*.exe
           retention-days: 30
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
-          name: STS2-Mod-Manager-Installer
+          name: Nexus-Mod-Manager-Installer
           path: src-tauri/target/release/bundle/nsis/*.exe
           retention-days: 30
