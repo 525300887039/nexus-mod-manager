@@ -24,6 +24,7 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState('nexus');
   const [currentGame, setCurrentGame] = useState(null);
   const [showGameSelector, setShowGameSelector] = useState(false);
+  const [gameSelectorMode, setGameSelectorMode] = useState('modal');
   const [initializingApp, setInitializingApp] = useState(true);
   const [mods, setMods] = useState([]);
   const [selectedMod, setSelectedMod] = useState(null);
@@ -168,6 +169,54 @@ export default function App() {
     }
     setPage(targetPage);
   }, [currentGame, showToast]);
+
+  useEffect(() => {
+    const handleScreenshotShortcuts = (event) => {
+      if (event.key === 'Escape' && showGameSelector) {
+        event.preventDefault();
+        event.stopPropagation();
+        setShowGameSelector(false);
+        setGameSelectorMode('modal');
+        return;
+      }
+
+      if (!event.altKey || !event.shiftKey) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      const pageShortcuts = new Map([
+        ['m', () => handleNavigate('mods')],
+        ['n', () => handleNavigate('nexus')],
+        ['s', () => handleNavigate('saves')],
+        ['l', () => handleNavigate('logs')],
+        ['t', () => handleNavigate('settings', { tab: 'nexus' })],
+        ['q', () => handleNavigate('settings', { tab: 'nexus' })],
+        ['w', () => handleNavigate('settings', { tab: 'translate' })],
+        ['e', () => handleNavigate('settings', { tab: 'about' })],
+        ['g', () => {
+          setGameSelectorMode('modal');
+          setShowGameSelector(true);
+        }],
+        ['h', () => {
+          setGameSelectorMode('fullscreen');
+          setShowGameSelector(true);
+        }],
+      ]);
+
+      const action = pageShortcuts.get(key);
+      if (!action) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      action();
+    };
+
+    window.addEventListener('keydown', handleScreenshotShortcuts);
+    return () => window.removeEventListener('keydown', handleScreenshotShortcuts);
+  }, [handleNavigate, showGameSelector]);
 
   const syncMods = useCallback((list) => {
     setMods(list);
@@ -361,6 +410,7 @@ export default function App() {
   const handleGameSelected = useCallback(async (game, infoOverride = null) => {
     try {
       setShowGameSelector(false);
+      setGameSelectorMode('modal');
       resetGameViewState();
 
       const info = infoOverride || await window.api.switchGame(game.nexusDomain);
@@ -615,7 +665,10 @@ export default function App() {
           setPage={handleNavigate}
           gamePath={gamePath}
           onSelectGamePath={handleSelectGamePath}
-          onSwitchGame={() => setShowGameSelector(true)}
+          onSwitchGame={() => {
+            setGameSelectorMode('modal');
+            setShowGameSelector(true);
+          }}
           enabledCount={enabledCount}
           totalCount={mods.length}
           gameVersion={gameVersion}
@@ -1165,12 +1218,26 @@ export default function App() {
       />
 
       {showGameSelector && (
-        <GameSelector
-          mode="modal"
-          currentGame={currentGame}
-          onGameSelected={handleGameSelected}
-          onClose={() => setShowGameSelector(false)}
-        />
+        gameSelectorMode === 'fullscreen' ? (
+          <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white">
+            <TitleBar currentGame={currentGame} />
+            <GameSelector
+              mode="fullscreen"
+              currentGame={currentGame}
+              onGameSelected={handleGameSelected}
+            />
+          </div>
+        ) : (
+          <GameSelector
+            mode="modal"
+            currentGame={currentGame}
+            onGameSelected={handleGameSelected}
+            onClose={() => {
+              setShowGameSelector(false);
+              setGameSelectorMode('modal');
+            }}
+          />
+        )
       )}
 
       {/* Toast */}
