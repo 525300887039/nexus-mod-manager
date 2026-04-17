@@ -31,4 +31,4 @@
 
 ---
 
-**下载**: 附件中的 `sts2-mod-manager.exe` 即为 Tauri 安装包（约 4MB）
+**下载**: 附件中的 `nexus-mod-manager.exe` 即为 Tauri 安装包（约 4MB）
