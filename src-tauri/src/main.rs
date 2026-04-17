@@ -3,10 +3,23 @@
 use std::fs;
 use std::io::Write;
 
+const CURRENT_APP_DIR_NAME: &str = "NexusModManager";
+const LEGACY_APP_DIR_NAME: &str = concat!("ST", "S2ModManager");
+
+fn log_dir() -> std::path::PathBuf {
+    let base_dir = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let current_dir = base_dir.join(CURRENT_APP_DIR_NAME);
+    let legacy_dir = base_dir.join(LEGACY_APP_DIR_NAME);
+
+    if current_dir.exists() || !legacy_dir.exists() {
+        current_dir
+    } else {
+        legacy_dir
+    }
+}
+
 fn setup_logging() {
-    let log_dir = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("STS2ModManager");
+    let log_dir = log_dir();
     let _ = fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("launch.log");
     if let Ok(mut f) = fs::File::create(&log_path) {
@@ -31,13 +44,11 @@ fn main() {
 
     // Catch panics and write to log
     let result = std::panic::catch_unwind(|| {
-        sts2_mod_manager_lib::run();
+        nexus_mod_manager_lib::run();
     });
 
     if let Err(e) = result {
-        let log_dir = dirs::config_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("STS2ModManager");
+        let log_dir = log_dir();
         let log_path = log_dir.join("launch.log");
         if let Ok(mut f) = fs::OpenOptions::new().append(true).open(&log_path) {
             let _ = writeln!(f, "[{}] PANIC: {:?}", timestamp(), e);
@@ -53,7 +64,7 @@ fn main() {
             unsafe {
                 use std::ffi::CString;
                 let text = CString::new(msg).unwrap_or_default();
-                let title = CString::new("STS2 Mod Manager - Error").unwrap_or_default();
+                let title = CString::new("Nexus Mod Manager - Error").unwrap_or_default();
                 winapi_messagebox(title.as_ptr(), text.as_ptr());
             }
         }

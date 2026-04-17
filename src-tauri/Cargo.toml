@@ -1,11 +1,12 @@
 [package]
-name = "sts2-mod-manager"
-version = "2.1.0"
+name = "nexus-mod-manager"
+version = "3.0.0"
 edition = "2021"
 license = "MIT"
+description = "通用 Nexus Mods 管理器"
 
 [lib]
-name = "sts2_mod_manager_lib"
+name = "nexus_mod_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

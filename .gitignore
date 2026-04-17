@@ -1,8 +1,6 @@
 node_modules/
 release/
-dist/win-unpacked/
-dist/builder-debug.yml
-dist/*.exe
+dist/
 test_*.js
 *.zip
 .DS_Store
