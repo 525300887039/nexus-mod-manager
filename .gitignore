@@ -10,6 +10,8 @@ Thumbs.db
 src-tauri/target/
 dist-tauri/renderer.js
 dist-tauri/renderer.js.LICENSE.txt
+dist-tauri/output.css
+src/output.css
 
 # Build outputs
 builds/
