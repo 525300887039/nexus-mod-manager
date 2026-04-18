@@ -4,11 +4,11 @@
   "description": "通用 Nexus Mods 管理器",
   "license": "MIT",
   "scripts": {
-    "build:css": "npx tailwindcss -i ./src/index.css -o ./src/output.css --watch",
-    "build:tauri-fe": "npx tailwindcss -i ./src/index.css -o ./src/output.css && webpack --config webpack.tauri.config.js --mode production",
+    "build:css": "npx tailwindcss -i ./src/index.css -o ./dist-tauri/output.css --watch",
+    "build:tauri-fe": "npx tailwindcss -i ./src/index.css -o ./dist-tauri/output.css && webpack --config webpack.tauri.config.js --mode production",
     "tauri": "npx tauri",
-    "tauri:dev": "npm run build:tauri-fe && npx tauri dev --config src-tauri/tauri.dev.conf.json",
-    "tauri:build": "npm run build:tauri-fe && npx tauri build"
+    "tauri:dev": "npx tauri dev",
+    "tauri:build": "npx tauri build"
   },
   "devDependencies": {
     "@babel/core": "^7.24.0",

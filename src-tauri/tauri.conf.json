@@ -5,9 +5,9 @@
   "identifier": "com.nexus.mod-manager",
   "build": {
     "frontendDist": "../dist-tauri",
-    "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "",
-    "beforeDevCommand": ""
+    "devUrl": null,
+    "beforeBuildCommand": "npm run build:tauri-fe",
+    "beforeDevCommand": "npm run build:tauri-fe"
   },
   "app": {
     "windows": [
