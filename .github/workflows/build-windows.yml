@@ -5,18 +5,15 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -44,7 +41,7 @@ jobs:
         shell: cmd
 
       - name: Upload portable exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Nexus-Mod-Manager-Portable
           path: src-tauri/target/release/nexus-mod-manager.exe
@@ -52,7 +49,7 @@ jobs:
           retention-days: 30
 
       - name: Upload NSIS installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Nexus-Mod-Manager-Installer
           path: src-tauri/target/release/bundle/nsis/*.exe
