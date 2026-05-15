@@ -18,6 +18,7 @@ pub mod saves;
 pub mod translate;
 pub mod translate_engine;
 pub mod translate_llm;
+pub mod translations;
 pub mod types;
 
 mod context;
