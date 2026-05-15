@@ -729,7 +729,9 @@ pub async fn nexus_start_download(
 ) -> Result<(), String> {
     let game_domain = current_game_domain(&app)?;
 
-    let is_premium = nexus_api::ensure_premium_status(&app).await.unwrap_or(false);
+    let is_premium = nexus_api::ensure_premium_status(&app.state::<AppState>().ctx)
+        .await
+        .unwrap_or(false);
     if is_premium {
         let resolved_file_id = match file_id {
             Some(id) => Some(id),

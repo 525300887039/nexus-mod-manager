@@ -13,6 +13,7 @@ pub mod game_profile;
 pub mod db;
 pub mod config;
 pub mod mods;
+pub mod nexus_api;
 pub mod profiles;
 pub mod saves;
 pub mod translate;
