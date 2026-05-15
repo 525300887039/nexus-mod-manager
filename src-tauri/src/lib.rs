@@ -1,8 +1,9 @@
-mod app_paths;
+pub use nmm_core::paths as app_paths;
+pub use nmm_core::game_profile;
+
 mod config;
 mod db;
 mod game;
-mod game_profile;
 mod logs;
 mod mods;
 mod nexus_api;

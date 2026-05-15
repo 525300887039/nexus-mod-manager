@@ -2370,6 +2370,7 @@ version = "3.0.1"
 dependencies = [
  "dirs",
  "encoding_rs",
+ "nmm-core",
  "opener",
  "reqwest 0.12.28",
  "rusqlite",
@@ -2387,6 +2388,16 @@ dependencies = [
  "unrar",
  "urlencoding",
  "zip",
+]
+
+[[package]]
+name = "nmm-core"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
