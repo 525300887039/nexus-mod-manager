@@ -2376,7 +2376,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sevenz-rust",
  "sysinfo",
  "tauri",
  "tauri-build",
@@ -2385,9 +2384,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tokio",
- "unrar",
  "urlencoding",
- "zip",
 ]
 
 [[package]]
@@ -2398,6 +2395,9 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sevenz-rust",
+ "unrar",
+ "zip",
 ]
 
 [[package]]
