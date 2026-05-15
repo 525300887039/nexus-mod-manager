@@ -28,7 +28,7 @@ fn collect_translation_cache_map(state: &tauri::State<'_, AppState>) -> Result<V
         .lock()
         .map_err(|e| format!("database lock poisoned: {}", e))?;
     if let Some(ref game_path) = game_path {
-        db::sync_saved_translations_with_game_path_db(&mut db, &game_domain, game_path)?;
+        db::sync_saved_translations_with_game_path(&mut db, &game_domain, game_path)?;
     }
     let saved_translations = db::saved_translations_load_db(&db, &game_domain)?;
     let mut result = Map::new();

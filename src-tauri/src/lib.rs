@@ -324,7 +324,7 @@ pub fn run() {
                         .as_ref()
                         .map(|profile| profile.nexus_domain.as_str())
                         .unwrap_or_default();
-                    if let Err(err) = db::sync_saved_translations_with_game_path_db(
+                    if let Err(err) = db::sync_saved_translations_with_game_path(
                         &mut db_conn,
                         game_domain,
                         game_path,

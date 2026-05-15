@@ -47,7 +47,7 @@ fn sync_translations(
         .db
         .lock()
         .map_err(|e| format!("database lock poisoned: {}", e))?;
-    crate::db::sync_saved_translations_with_game_path_db(&mut db, &profile.nexus_domain, game_path)
+    crate::db::sync_saved_translations_with_game_path(&mut db, &profile.nexus_domain, game_path)
 }
 
 #[tauri::command]

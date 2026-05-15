@@ -622,6 +622,133 @@ pub fn sync_saved_translations_with_lookup(
     Ok(())
 }
 
+/// 内部辅助：从游戏目录扫描 mods，构建 `ModSourceLookup`。
+fn build_mod_source_lookup(game_path: &str) -> ModSourceLookup {
+    crate::mods::scan_mods_internal(game_path)
+        .into_iter()
+        .filter_map(|mod_info| {
+            mod_info
+                .id
+                .map(|id| (id, (mod_info.name, mod_info.description)))
+        })
+        .collect()
+}
+
+/// 同步已保存翻译与当前游戏目录下的 mod 元数据。
+///
+/// 内部调用 [`crate::mods::scan_mods_internal`] 构建 lookup，再走
+/// [`sync_saved_translations_with_lookup`]。
+pub fn sync_saved_translations_with_game_path(
+    db: &mut Connection,
+    game_domain: &str,
+    game_path: &str,
+) -> Result<(), String> {
+    let lookup = build_mod_source_lookup(game_path);
+    sync_saved_translations_with_lookup(db, game_domain, lookup)
+}
+
+/// 把旧版 `translations.json`（如存在）迁移进 SQLite，迁移成功后重命名旧文件为备份。
+///
+/// 依赖 [`crate::config::load_or_detect_game_path`] / [`crate::config::load_current_profile`]
+/// 解析当前游戏上下文，以及 [`crate::mods::scan_mods_internal`] 构建 mod 源数据 lookup。
+pub fn translations_migrate_json_to_db(db: &mut Connection) -> Result<(), String> {
+    let Some(legacy_path) = legacy_translations_path() else {
+        return Ok(());
+    };
+
+    if !legacy_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&legacy_path)
+        .map_err(|e| format!("读取旧 translations.json 失败: {}", e))?;
+    let parsed: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析旧 translations.json 失败: {}", e))?;
+    let Some(entries) = parsed.as_object() else {
+        return Err("旧 translations.json 根节点必须是对象".to_string());
+    };
+
+    let mod_lookup = crate::config::load_or_detect_game_path()
+        .map(|game_path| build_mod_source_lookup(&game_path))
+        .unwrap_or_default();
+    let game_domain = crate::config::load_current_profile()
+        .map(|profile| profile.nexus_domain)
+        .unwrap_or_else(default_game_domain);
+
+    let tx = db
+        .transaction()
+        .map_err(|e| format!("开启翻译迁移事务失败: {}", e))?;
+
+    for (key, value) in entries {
+        if let Some(translated) = value.as_str() {
+            if !key.trim().is_empty() && !translated.trim().is_empty() {
+                upsert_translation_row(&tx, &game_domain, key, translated, "legacy")?;
+            }
+            continue;
+        }
+
+        let Some(legacy_entry) = value.as_object() else {
+            continue;
+        };
+        let name_translated = legacy_entry.get("name").and_then(|value| value.as_str());
+        let desc_translated = legacy_entry.get("desc").and_then(|value| value.as_str());
+        let (source_name, source_desc) = mod_lookup.get(key).cloned().unwrap_or((None, None));
+
+        saved_translation_upsert_db(
+            &tx,
+            &game_domain,
+            key,
+            name_translated,
+            desc_translated,
+            source_name.as_deref(),
+            source_desc.as_deref(),
+        )?;
+
+        if let Some(translated_name) = name_translated {
+            if let Some(source_text) = source_name.as_deref() {
+                if !source_text.trim().is_empty() && !translated_name.trim().is_empty() {
+                    upsert_translation_row(
+                        &tx,
+                        &game_domain,
+                        source_text,
+                        translated_name,
+                        "legacy",
+                    )?;
+                }
+            }
+        }
+
+        if let Some(translated_desc) = desc_translated {
+            if let Some(source_text) = source_desc.as_deref() {
+                if !source_text.trim().is_empty() && !translated_desc.trim().is_empty() {
+                    upsert_translation_row(
+                        &tx,
+                        &game_domain,
+                        source_text,
+                        translated_desc,
+                        "legacy",
+                    )?;
+                }
+            }
+        }
+    }
+
+    tx.commit()
+        .map_err(|e| format!("提交翻译迁移事务失败: {}", e))?;
+
+    let backup_path = legacy_backup_path_for(&legacy_path);
+    fs::rename(&legacy_path, &backup_path).map_err(|e| {
+        format!(
+            "迁移完成后重命名旧 translations.json 失败 ({} -> {}): {}",
+            legacy_path.display(),
+            backup_path.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
 pub fn translation_cache_get_db(
     db: &Connection,
     game_domain: &str,
