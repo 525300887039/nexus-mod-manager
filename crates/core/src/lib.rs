@@ -15,6 +15,7 @@ pub mod config;
 pub mod mods;
 pub mod profiles;
 pub mod saves;
+pub mod translate;
 pub mod types;
 
 mod context;
