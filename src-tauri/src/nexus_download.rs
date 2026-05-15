@@ -404,11 +404,7 @@ fn decode_file_name_from_url(url: &tauri::webview::Url) -> String {
     url.path_segments()
         .and_then(|segments| segments.last())
         .filter(|segment| !segment.trim().is_empty())
-        .map(|segment| {
-            urlencoding::decode(segment)
-                .map(|decoded| decoded.into_owned())
-                .unwrap_or_else(|_| segment.to_string())
-        })
+        .map(nexus_api::decode_url_segment)
         .unwrap_or_else(|| "mod-download".to_string())
 }
 

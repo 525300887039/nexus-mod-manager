@@ -274,6 +274,15 @@ pub async fn get_premium_download_link(
         .ok_or_else(|| "Nexus 未返回可用的下载链接".to_string())
 }
 
+/// 解码 URL 片段（percent-encoded）为可读字符串；解码失败时返回原文。
+///
+/// 供下载流程从 URL 提取文件名时使用。
+pub fn decode_url_segment(segment: &str) -> String {
+    urlencoding::decode(segment)
+        .map(|decoded| decoded.into_owned())
+        .unwrap_or_else(|_| segment.to_string())
+}
+
 /// 获取某个 Mod 的文件列表（库函数，供下载流程内部复用）。
 pub async fn get_mod_files_raw(
     game_domain: &str,

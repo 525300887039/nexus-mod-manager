@@ -11,8 +11,8 @@ use tauri::State;
 // `crate::nexus_api::xxx` 访问。
 #[allow(unused_imports)]
 pub use core_api::{
-    ensure_premium_status, get_mod_files_raw, get_premium_download_link, NexusFileInfo,
-    NexusModInfo, NexusPagedModsResult, NexusValidateResult,
+    decode_url_segment, ensure_premium_status, get_mod_files_raw, get_premium_download_link,
+    NexusFileInfo, NexusModInfo, NexusPagedModsResult, NexusValidateResult,
 };
 
 #[tauri::command]
