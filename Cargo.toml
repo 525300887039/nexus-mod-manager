@@ -1,0 +1,18 @@
+# Nexus Mod Manager — Cargo workspace 入口
+#
+# 本文件对应 OpenSpec 能力 `project-structure`：定义项目的 crate 组织、
+# 构建命令与目录布局约定。
+#
+# 当前 members：
+#   - src-tauri/  Tauri 桌面应用（GUI binary，原生入口）
+#
+# 后续 CLI 化 change 将在 crates/ 下添加 sub-crate：
+#   - crates/core/  无 Tauri 依赖的业务逻辑库
+#   - crates/cli/   独立 CLI binary
+#
+# 添加 sub-crate 时把 members 扩展为：["src-tauri", "crates/core", "crates/cli"]
+# 或改为 ["src-tauri", "crates/*"]。本 change 范围内仅保留 src-tauri 单 member。
+
+[workspace]
+members = ["src-tauri"]
+resolver = "2"

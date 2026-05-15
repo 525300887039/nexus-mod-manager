@@ -11,6 +11,8 @@ Tauri 2 + React 18 桌面应用，面向多游戏管理 Nexus Mods。Windows 优
 
 ## 开发与构建
 
+项目采用 Cargo workspace 布局，构建命令在**项目根**执行：
+
 ```bash
 npm install
 npm run tauri:dev        # 前端 webpack + 后端 cargo 联调
@@ -18,7 +20,7 @@ npm run tauri:build      # 生产 NSIS 安装包
 npm run build:tauri-fe   # 仅构建前端到 dist-tauri/
 ```
 
-后端单独编译：`cd src-tauri && cargo build`。
+后端单独编译：在项目根执行 `cargo build -p nexus-mod-manager`（不再 `cd src-tauri`）。Workspace 产物位于项目根 `target/` 目录，**不是** `src-tauri/target/`。
 
 ## 提交规范
 

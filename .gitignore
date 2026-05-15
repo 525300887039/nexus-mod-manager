@@ -5,9 +5,11 @@ test_*.js
 *.zip
 .DS_Store
 Thumbs.db
+CLI_PROPOSAL.md
 
 # Tauri
 src-tauri/target/
+target/
 dist-tauri/renderer.js
 dist-tauri/renderer.js.LICENSE.txt
 dist-tauri/output.css
@@ -21,3 +23,8 @@ builds/
 *.db
 *.sqlite
 *.sqlite3
+
+# OpenSpec（本地规格驱动开发工具，未与团队共享）
+openspec/
+.claude/commands/opsx/
+.claude/skills/openspec-*/
