@@ -16,24 +16,31 @@ mod translate_llm;
 mod translations;
 
 use crate::game_profile::GameProfile;
+use nmm_core::AppContext;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 const LEGACY_DEFAULT_GAME_DOMAIN: &str = "slaythespire2";
 
+/// GUI 进程状态：核心运行时（共享至未来的 CLI）+ GUI 专属的游戏运行状态机。
+///
+/// 字段访问通过 `Deref<Target=AppContext>` 透传，业务模块可继续写
+/// `state.db.lock()` / `state.game_path.lock()` 等。`game_state` 是 GUI 专属字段。
 pub struct AppState {
-    pub db: Mutex<rusqlite::Connection>,
-    pub game_path: Mutex<Option<String>>,
+    pub ctx: Arc<AppContext>,
     pub game_state: Mutex<String>, // "idle" | "launching" | "running"
-    pub nexus_mod_cache: Mutex<
-        std::collections::HashMap<String, std::collections::HashMap<u64, nexus_api::NexusModInfo>>,
-    >,
-    pub current_profile: Mutex<Option<GameProfile>>,
-    pub nexus_is_premium: Mutex<Option<bool>>, // None=未判定, Some(true/false)=已缓存
+}
+
+impl Deref for AppState {
+    type Target = AppContext;
+    fn deref(&self) -> &AppContext {
+        &self.ctx
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -296,35 +303,47 @@ pub fn run() {
             if let Err(error) = migrate_legacy_app_data() {
                 eprintln!("Legacy app-data migration failed: {}", error);
             }
-            let mut db_conn = db::init_db(app.handle())
+            let db_path = nmm_core::db::cache_db_path()
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let ctx = AppContext::init(&db_path)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
             let current_profile = config::load_current_profile();
             let current_game_path = config::load_or_detect_game_path();
 
-            if let Err(err) = db::translations_migrate_json_to_db(&mut db_conn) {
-                eprintln!("Translation migration failed: {}", err);
-            }
-            if let Some(game_path) = current_game_path.as_deref() {
-                let game_domain = current_profile
-                    .as_ref()
-                    .map(|profile| profile.nexus_domain.as_str())
-                    .unwrap_or_default();
-                if let Err(err) = db::sync_saved_translations_with_game_path_db(
-                    &mut db_conn,
-                    game_domain,
-                    game_path,
-                ) {
-                    eprintln!("Saved translation sync failed: {}", err);
+            {
+                let mut db_conn = ctx
+                    .db
+                    .lock()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                if let Err(err) = db::translations_migrate_json_to_db(&mut db_conn) {
+                    eprintln!("Translation migration failed: {}", err);
+                }
+                if let Some(game_path) = current_game_path.as_deref() {
+                    let game_domain = current_profile
+                        .as_ref()
+                        .map(|profile| profile.nexus_domain.as_str())
+                        .unwrap_or_default();
+                    if let Err(err) = db::sync_saved_translations_with_game_path_db(
+                        &mut db_conn,
+                        game_domain,
+                        game_path,
+                    ) {
+                        eprintln!("Saved translation sync failed: {}", err);
+                    }
                 }
             }
 
+            *ctx.current_profile.lock().map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+            })? = current_profile;
+            *ctx.game_path.lock().map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+            })? = current_game_path;
+
             app.manage(AppState {
-                db: Mutex::new(db_conn),
-                game_path: Mutex::new(current_game_path),
+                ctx,
                 game_state: Mutex::new("idle".to_string()),
-                nexus_mod_cache: Mutex::new(std::collections::HashMap::new()),
-                current_profile: Mutex::new(current_profile),
-                nexus_is_premium: Mutex::new(None),
             });
 
             Ok(())

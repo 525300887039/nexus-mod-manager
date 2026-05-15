@@ -26,14 +26,6 @@ pub use core_db::{
     SavedTranslationRow,
 };
 
-/// 包装 `nmm_core::db::init_db`，保留原签名供 `lib.rs::setup` 直接调用。
-///
-/// Step 6 lib.rs 重构后改为直接 `nmm_core::AppContext::init(...)`，本 wrapper 可删除。
-pub fn init_db(_app_handle: &tauri::AppHandle) -> Result<Connection, String> {
-    let db_path = core_db::cache_db_path()?;
-    core_db::init_db(&db_path)
-}
-
 /// 构建 mod 源数据 lookup（依赖 mods，本 change 暂留 src-tauri 层）。
 fn build_mod_source_lookup(game_path: &str) -> core_db::ModSourceLookup {
     mods::scan_mods_internal(game_path)
