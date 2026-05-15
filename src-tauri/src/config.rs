@@ -24,6 +24,11 @@ pub struct Config {
     pub current_game: Option<String>,
     #[serde(rename = "nexusApiKey", alias = "nexus_api_key")]
     pub nexus_api_key: Option<String>,
+    #[serde(
+        rename = "nexusDownloadWindowVisible",
+        alias = "nexus_download_window_visible"
+    )]
+    pub nexus_download_window_visible: Option<bool>,
     pub games: HashMap<String, GameConfig>,
 }
 
@@ -602,7 +607,10 @@ pub fn config_remove_game(
 }
 
 #[tauri::command]
-pub fn config_save_nexus_key(key: String) -> Result<(), String> {
+pub fn config_save_nexus_key(
+    state: tauri::State<'_, AppState>,
+    key: String,
+) -> Result<(), String> {
     let trimmed = key.trim();
     if trimmed.is_empty() {
         return Err("API key cannot be empty".to_string());
@@ -610,7 +618,13 @@ pub fn config_save_nexus_key(key: String) -> Result<(), String> {
 
     let mut cfg = load_config();
     cfg.nexus_api_key = Some(trimmed.to_string());
-    save_config_inner(&cfg)
+    save_config_inner(&cfg)?;
+
+    // 换 Key 后清空 premium 缓存，下次下载时重新判定会员状态
+    if let Ok(mut premium) = state.nexus_is_premium.lock() {
+        *premium = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -619,4 +633,16 @@ pub fn config_get_nexus_key() -> Option<String> {
         .nexus_api_key
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
+}
+
+#[tauri::command]
+pub fn config_set_nexus_download_visible(visible: bool) -> Result<(), String> {
+    let mut cfg = load_config();
+    cfg.nexus_download_window_visible = Some(visible);
+    save_config_inner(&cfg)
+}
+
+#[tauri::command]
+pub fn config_get_nexus_download_visible() -> bool {
+    load_config().nexus_download_window_visible.unwrap_or(true)
 }

@@ -180,9 +180,11 @@ window.api = {
   nexusGetMod: (modId) => invoke('nexus_get_mod', { modId }),
   nexusGetModFiles: (modId) => invoke('nexus_get_mod_files', { modId }),
   nexusFindModByName: (name) => invoke('nexus_find_mod_by_name', { name }),
-  openNexusDownload: (modId, fileId) => invoke('nexus_open_download_page', { modId, fileId }),
+  openNexusDownload: (modId, fileId) => invoke('nexus_start_download', { modId, fileId }),
   saveNexusKey: (key) => invoke('config_save_nexus_key', { key }),
   getNexusKey: () => invoke('config_get_nexus_key'),
+  getNexusDownloadVisible: () => invoke('config_get_nexus_download_visible'),
+  setNexusDownloadVisible: (visible) => invoke('config_set_nexus_download_visible', { visible }),
 
   // Saves
   scanSaves: () => invoke('saves_scan'),

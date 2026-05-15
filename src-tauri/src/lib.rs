@@ -32,6 +32,7 @@ pub struct AppState {
         std::collections::HashMap<String, std::collections::HashMap<u64, nexus_api::NexusModInfo>>,
     >,
     pub current_profile: Mutex<Option<GameProfile>>,
+    pub nexus_is_premium: Mutex<Option<bool>>, // None=未判定, Some(true/false)=已缓存
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -182,6 +183,7 @@ fn migrate_config_if_needed(legacy_dir: &Path, current_dir: &Path) -> Result<(),
     let migrated_config = config::Config {
         current_game: Some(LEGACY_DEFAULT_GAME_DOMAIN.to_string()),
         nexus_api_key: normalize_optional_string(legacy_config.nexus_api_key),
+        nexus_download_window_visible: None,
         games,
     };
     let serialized = serde_json::to_string_pretty(&migrated_config)
@@ -321,6 +323,7 @@ pub fn run() {
                 game_state: Mutex::new("idle".to_string()),
                 nexus_mod_cache: Mutex::new(std::collections::HashMap::new()),
                 current_profile: Mutex::new(current_profile),
+                nexus_is_premium: Mutex::new(None),
             });
 
             Ok(())
@@ -335,6 +338,8 @@ pub fn run() {
             config::config_remove_game,
             config::config_save_nexus_key,
             config::config_get_nexus_key,
+            config::config_set_nexus_download_visible,
+            config::config_get_nexus_download_visible,
             // Window
             window_minimize,
             window_maximize,
@@ -390,7 +395,7 @@ pub fn run() {
             nexus_api::nexus_get_mod,
             nexus_api::nexus_get_mod_files,
             nexus_api::nexus_find_mod_by_name,
-            nexus_download::nexus_open_download_page,
+            nexus_download::nexus_start_download,
             // Saves
             saves::saves_scan,
             saves::saves_export,

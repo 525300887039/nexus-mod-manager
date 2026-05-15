@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Download,
   Loader2,
+  LogIn,
   Wrench,
   X,
 } from 'lucide-react';
@@ -12,6 +13,16 @@ const PHASE_META = {
   preparing: {
     icon: Download,
     iconClassName: 'text-sky-600',
+    containerClassName: 'border-sky-200 bg-sky-50 text-sky-800',
+  },
+  'login-required': {
+    icon: LogIn,
+    iconClassName: 'text-indigo-600',
+    containerClassName: 'border-indigo-200 bg-indigo-50 text-indigo-800',
+  },
+  'auto-downloading': {
+    icon: Loader2,
+    iconClassName: 'text-sky-600 animate-spin',
     containerClassName: 'border-sky-200 bg-sky-50 text-sky-800',
   },
   downloading: {
@@ -57,7 +68,7 @@ export default function DownloadProgress({ status, onClose }) {
 
   const meta = PHASE_META[status.phase] || PHASE_META.preparing;
   const Icon = meta.icon;
-  const showClose = status.phase === 'error';
+  const showClose = status.phase === 'error' || status.phase === 'login-required';
 
   return (
     <div

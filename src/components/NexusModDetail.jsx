@@ -186,13 +186,9 @@ export default function NexusModDetail({
     setOpeningDownload(true);
     onNexusDownloadStatusChange?.({
       phase: 'preparing',
-      message: pendingLinkedFile
-        ? `正在打开 ${fileName} 的目标文件下载页...`
-        : canAutoInstall
-          ? `正在打开 ${fileName} 的下载页...`
-          : openingSpecificFile
-            ? `正在打开 ${fileName} 的目标文件下载页（文件类型待确认）...`
-            : `正在打开 ${fileName} 的下载页（该文件仅下载，不会自动安装）...`,
+      message: canAutoInstall || openingSpecificFile
+        ? `正在准备自动下载 ${fileName}...`
+        : `正在准备下载 ${fileName}（该文件类型不会自动安装）...`,
       fileName,
     });
 

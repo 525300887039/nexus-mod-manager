@@ -11,6 +11,36 @@ export default function NexusSettings({ initialKey = '', onSaved, compact = fals
   const [validationResult, setValidationResult] = useState(null);
   const [validationError, setValidationError] = useState('');
   const [status, setStatus] = useState(null);
+  const [downloadWindowVisible, setDownloadWindowVisible] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (typeof window.api?.getNexusDownloadVisible === 'function') {
+      window.api.getNexusDownloadVisible()
+        .then((visible) => {
+          if (!cancelled) {
+            setDownloadWindowVisible(visible !== false);
+          }
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleToggleDownloadWindow = async () => {
+    const next = !downloadWindowVisible;
+    setDownloadWindowVisible(next);
+    try {
+      await window.api.setNexusDownloadVisible(next);
+    } catch (error) {
+      setDownloadWindowVisible(!next);
+      onShowToast?.(error?.message || String(error), 'error');
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -234,6 +264,30 @@ export default function NexusSettings({ initialKey = '', onSaved, compact = fals
             </div>
           </div>
         )}
+
+        <div className="flex items-start justify-between gap-4 rounded-2xl border border-gray-100 bg-gray-50 px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-900">自动下载时显示浏览器窗口</p>
+            <p className="mt-1 text-xs leading-5 text-gray-500">
+              关闭后将后台静默下载；需要登录 Nexus 账号时仍会自动弹出窗口。
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={downloadWindowVisible}
+            onClick={handleToggleDownloadWindow}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+              downloadWindowVisible ? 'bg-gray-900' : 'bg-gray-300'
+            }`}
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                downloadWindowVisible ? 'translate-x-5' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
       </div>
     </section>
   );

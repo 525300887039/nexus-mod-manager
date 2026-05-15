@@ -3,7 +3,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 const NEXUS_API_BASE: &str = "https://api.nexusmods.com/v1";
 const NEXUS_GRAPHQL_URL: &str = "https://api-router.nexusmods.com/graphql";
@@ -187,6 +187,12 @@ struct NexusFilesResponse {
     files: Vec<NexusFileInfo>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct NexusDownloadLink {
+    #[serde(rename = "URI")]
+    uri: String,
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
 struct NexusErrorResponse {
@@ -234,6 +240,69 @@ fn get_saved_api_key() -> Result<String, String> {
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
         .ok_or_else(|| "请先配置 Nexus Mods API Key".to_string())
+}
+
+/// 判断当前账号是否为 Premium 会员，带 AppState 懒缓存。
+/// 未配置 API Key 时返回 Ok(false)（视为非会员，走 webview 下载路径）。
+/// validate 接口失败（网络异常、Key 失效）时返回 Err，由调用方回退处理。
+pub async fn ensure_premium_status(app: &AppHandle) -> Result<bool, String> {
+    {
+        let state = app.state::<AppState>();
+        let cache = state
+            .nexus_is_premium
+            .lock()
+            .map_err(|e| format!("premium 状态锁已损坏: {}", e))?;
+        if let Some(value) = *cache {
+            return Ok(value);
+        }
+    }
+
+    let api_key = match get_saved_api_key() {
+        Ok(key) => key,
+        Err(_) => return Ok(false),
+    };
+
+    let result: NexusValidateResult = nexus_get("/users/validate.json", &api_key).await?;
+    if let Ok(mut cache) = app.state::<AppState>().nexus_is_premium.lock() {
+        *cache = Some(result.is_premium);
+    }
+    Ok(result.is_premium)
+}
+
+/// 调用官方 download_link 接口获取 Premium 直链。非会员会返回错误（403），由调用方回退。
+pub async fn get_premium_download_link(
+    game_domain: &str,
+    mod_id: u64,
+    file_id: u64,
+) -> Result<String, String> {
+    let api_key = get_saved_api_key()?;
+    let links: Vec<NexusDownloadLink> = nexus_get(
+        &format!(
+            "/games/{}/mods/{}/files/{}/download_link.json",
+            game_domain, mod_id, file_id
+        ),
+        &api_key,
+    )
+    .await?;
+    links
+        .into_iter()
+        .map(|link| link.uri)
+        .find(|uri| !uri.trim().is_empty())
+        .ok_or_else(|| "Nexus 未返回可用的下载链接".to_string())
+}
+
+/// 获取某个 Mod 的文件列表（库函数，供下载流程内部复用）。
+pub async fn get_mod_files_raw(
+    game_domain: &str,
+    mod_id: u64,
+) -> Result<Vec<NexusFileInfo>, String> {
+    let api_key = get_saved_api_key()?;
+    let response: NexusFilesResponse = nexus_get(
+        &format!("/games/{}/mods/{}/files.json", game_domain, mod_id),
+        &api_key,
+    )
+    .await?;
+    Ok(response.files)
 }
 
 fn current_game_domain(state: &State<AppState>) -> Result<String, String> {
@@ -1012,13 +1081,7 @@ pub async fn nexus_get_mod_files(
     state: State<'_, AppState>,
 ) -> Result<Vec<NexusFileInfo>, String> {
     let game_domain = current_game_domain(&state)?;
-    let api_key = get_saved_api_key()?;
-    let response: NexusFilesResponse = nexus_get(
-        &format!("/games/{}/mods/{}/files.json", game_domain, mod_id),
-        &api_key,
-    )
-    .await?;
-    Ok(response.files)
+    get_mod_files_raw(&game_domain, mod_id).await
 }
 
 #[tauri::command]
