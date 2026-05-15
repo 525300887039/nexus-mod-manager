@@ -16,6 +16,7 @@ pub mod mods;
 pub mod profiles;
 pub mod saves;
 pub mod translate;
+pub mod translate_engine;
 pub mod translate_llm;
 pub mod types;
 
