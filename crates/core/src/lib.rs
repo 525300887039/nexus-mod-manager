@@ -13,6 +13,7 @@ pub mod game_profile;
 pub mod db;
 pub mod config;
 pub mod profiles;
+pub mod saves;
 pub mod types;
 
 mod context;
