@@ -14,6 +14,7 @@ pub mod db;
 pub mod config;
 pub mod mods;
 pub mod nexus_api;
+pub mod nexus_download;
 pub mod profiles;
 pub mod saves;
 pub mod translate;
