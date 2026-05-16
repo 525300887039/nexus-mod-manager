@@ -1,12 +1,9 @@
-use crate::{
-    config,
-    mods::{is_supported_archive_path, smart_extract_archive},
-    nexus_api, AppState,
+use crate::{config, nexus_api, AppState};
+use nmm_core::nexus_download::{
+    self as core_dl, ErrorKind, NexusDownloadEvent, NexusDownloadReporter,
 };
 use serde::Serialize;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::path::Path;
 use tauri::{
     webview::{DownloadEvent, WebviewWindowBuilder},
     AppHandle, Emitter, Manager, WebviewUrl,
@@ -19,8 +16,6 @@ const INSTALL_SUCCESS_EVENT: &str = "nexus-install-success";
 const INSTALL_ERROR_EVENT: &str = "nexus-install-error";
 const DOWNLOAD_FAILED_EVENT: &str = "nexus-download-failed";
 const DOWNLOAD_SAVED_EVENT: &str = "nexus-download-saved";
-const API_DOWNLOAD_TIMEOUT_SECS: u64 = 600;
-const API_DOWNLOAD_USER_AGENT: &str = "NexusModManager/3.0";
 
 /// 注入到 Nexus 下载弹窗的自动化脚本。用 `initialization_script_for_all_frames`
 /// 注入，故在主框架和所有同源 / about:blank 子框架内都会运行。
@@ -352,6 +347,7 @@ const INJECTION_SCRIPT: &str = r#"
 })();
 "#;
 
+/// Tauri 端的事件 payload；与前端 `nexus-download-state` 监听点的 camelCase 字段对齐。
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NexusDownloadStatePayload {
@@ -360,15 +356,82 @@ struct NexusDownloadStatePayload {
     file_name: Option<String>,
 }
 
-fn current_game_path(app: &AppHandle) -> Result<Option<String>, String> {
-    let state = app.state::<AppState>();
-    state
-        .game_path
-        .lock()
-        .map(|game_path| game_path.clone())
-        .map_err(|e| format!("游戏路径状态锁已损坏: {}", e))
+/// `NexusDownloadReporter` 的 Tauri 实现：把 core 的事件枚举转成既有的 5 个 Tauri 事件
+/// emit。`close_window_on_success` 控制成功时是否关闭 `nexus-download` 窗口——
+/// API 路径无窗口可关（false）；webview 路径下载成功后需要关窗（true）。
+struct TauriEventReporter {
+    app: AppHandle,
+    close_window_on_success: bool,
 }
 
+impl TauriEventReporter {
+    fn new(app: AppHandle, close_window_on_success: bool) -> Self {
+        Self {
+            app,
+            close_window_on_success,
+        }
+    }
+
+    fn emit_state(&self, phase: &'static str, message: String, file_name: Option<String>) {
+        let _ = self.app.emit_to(
+            MAIN_WINDOW_LABEL,
+            DOWNLOAD_STATE_EVENT,
+            NexusDownloadStatePayload {
+                phase,
+                message,
+                file_name,
+            },
+        );
+    }
+}
+
+impl NexusDownloadReporter for TauriEventReporter {
+    fn report(&self, event: NexusDownloadEvent) {
+        match event {
+            NexusDownloadEvent::Preparing { message } => {
+                self.emit_state("preparing", message, None);
+            }
+            NexusDownloadEvent::Downloading { file_name, message } => {
+                self.emit_state("downloading", message, Some(file_name));
+            }
+            NexusDownloadEvent::Installing { file_name, message } => {
+                self.emit_state("installing", message, Some(file_name));
+            }
+            NexusDownloadEvent::Success { file_name, message } => {
+                self.emit_state("success", message, Some(file_name.clone()));
+                let _ = self
+                    .app
+                    .emit_to(MAIN_WINDOW_LABEL, INSTALL_SUCCESS_EVENT, file_name);
+                if self.close_window_on_success {
+                    if let Some(window) = self.app.get_webview_window(DOWNLOAD_WINDOW_LABEL) {
+                        let _ = window.close();
+                    }
+                }
+            }
+            NexusDownloadEvent::Saved { file_name, message } => {
+                self.emit_state("success", message.clone(), Some(file_name));
+                let _ = self
+                    .app
+                    .emit_to(MAIN_WINDOW_LABEL, DOWNLOAD_SAVED_EVENT, message);
+            }
+            NexusDownloadEvent::Error {
+                file_name,
+                message,
+                kind,
+            } => {
+                self.emit_state("error", message.clone(), file_name);
+                let bridge_event = match kind {
+                    ErrorKind::Download => DOWNLOAD_FAILED_EVENT,
+                    ErrorKind::Install => INSTALL_ERROR_EVENT,
+                };
+                let _ = self.app.emit_to(MAIN_WINDOW_LABEL, bridge_event, message);
+            }
+        }
+    }
+}
+
+/// 取当前游戏的 Nexus domain。dispatch 入口与导航回调都要用，故保留 src-tauri 这边的
+/// 辅助函数；core 内部用 `ctx.current_profile.lock()` 直接访问。
 fn current_game_domain(app: &AppHandle) -> Result<String, String> {
     let state = app.state::<AppState>();
     let domain = state
@@ -381,203 +444,24 @@ fn current_game_domain(app: &AppHandle) -> Result<String, String> {
     Ok(domain)
 }
 
-fn emit_download_state(
-    app: &AppHandle,
-    phase: &'static str,
-    message: impl Into<String>,
-    file_name: Option<String>,
-) {
-    let payload = NexusDownloadStatePayload {
-        phase,
-        message: message.into(),
-        file_name,
-    };
-    let _ = app.emit_to(MAIN_WINDOW_LABEL, DOWNLOAD_STATE_EVENT, payload);
+/// `auto-downloading` / `login-required` 这两个 phase 由 webview 导航回调专属触发，
+/// 不属于 core 的 `NexusDownloadEvent` 枚举，故由 src-tauri 直接 emit 一个简化的
+/// state payload。事件名与 payload 字段保持与前端契约一致。
+fn emit_webview_phase(app: &AppHandle, phase: &'static str, message: &str) {
+    let _ = app.emit_to(
+        MAIN_WINDOW_LABEL,
+        DOWNLOAD_STATE_EVENT,
+        NexusDownloadStatePayload {
+            phase,
+            message: message.to_string(),
+            file_name: None,
+        },
+    );
 }
 
 fn extract_file_name(path: &Path) -> Option<String> {
     path.file_name()
         .map(|name| name.to_string_lossy().to_string())
-}
-
-fn decode_file_name_from_url(url: &tauri::webview::Url) -> String {
-    url.path_segments()
-        .and_then(|segments| segments.last())
-        .filter(|segment| !segment.trim().is_empty())
-        .map(nexus_api::decode_url_segment)
-        .unwrap_or_else(|| "mod-download".to_string())
-}
-
-fn make_unique_destination(download_dir: &Path, file_name: &str) -> PathBuf {
-    let candidate = download_dir.join(file_name);
-    if !candidate.exists() {
-        return candidate;
-    }
-
-    let file_path = Path::new(file_name);
-    let stem = file_path
-        .file_stem()
-        .map(|value| value.to_string_lossy().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "mod".to_string());
-    let extension = file_path
-        .extension()
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let mut index = 1;
-    loop {
-        let next_name = if extension.is_empty() {
-            format!("{stem} ({index})")
-        } else {
-            format!("{stem} ({index}).{extension}")
-        };
-        let next_candidate = download_dir.join(next_name);
-        if !next_candidate.exists() {
-            return next_candidate;
-        }
-        index += 1;
-    }
-}
-
-/// 把已下载到本地的归档文件解压安装到游戏 mods 目录，并 emit 对应状态事件。
-/// webview 拦截下载（`close_window = true`，安装成功后关闭下载窗口）与
-/// Premium API 直链下载（`close_window = false`，无窗口）共用此函数。
-fn install_downloaded_archive(
-    app: &AppHandle,
-    archive_path: &Path,
-    file_name: &str,
-    close_window: bool,
-) {
-    if !archive_path.exists() {
-        let message = format!("下载完成后未找到文件: {}", file_name);
-        emit_download_state(app, "error", &message, Some(file_name.to_string()));
-        let _ = app.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
-        return;
-    }
-
-    if !is_supported_archive_path(archive_path) {
-        let message = format!(
-            "{} 已下载到临时目录，但不是支持自动安装的归档文件",
-            file_name
-        );
-        emit_download_state(app, "success", &message, Some(file_name.to_string()));
-        let _ = app.emit_to(MAIN_WINDOW_LABEL, DOWNLOAD_SAVED_EVENT, message);
-        return;
-    }
-
-    emit_download_state(
-        app,
-        "installing",
-        format!("正在安装 {}", file_name),
-        Some(file_name.to_string()),
-    );
-
-    let game_path = match current_game_path(app) {
-        Ok(game_path) => game_path,
-        Err(message) => {
-            emit_download_state(app, "error", &message, Some(file_name.to_string()));
-            let _ = app.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
-            return;
-        }
-    };
-    let Some(game_path) = game_path else {
-        let message = "尚未设置游戏目录，无法自动安装".to_string();
-        emit_download_state(app, "error", &message, Some(file_name.to_string()));
-        let _ = app.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
-        return;
-    };
-
-    let mods_dir = Path::new(&game_path).join("mods");
-    if let Err(error) = fs::create_dir_all(&mods_dir) {
-        let message = format!("无法创建 Mod 安装目录 {}: {}", mods_dir.display(), error);
-        emit_download_state(app, "error", &message, Some(file_name.to_string()));
-        let _ = app.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
-        return;
-    }
-
-    let archive_path_str = archive_path.to_string_lossy().to_string();
-    match smart_extract_archive(&archive_path_str, &mods_dir) {
-        Ok(_) => {
-            emit_download_state(
-                app,
-                "success",
-                format!("Mod 已安装: {}", file_name),
-                Some(file_name.to_string()),
-            );
-            let _ = app.emit_to(MAIN_WINDOW_LABEL, INSTALL_SUCCESS_EVENT, file_name.to_string());
-            if close_window {
-                if let Some(window) = app.get_webview_window(DOWNLOAD_WINDOW_LABEL) {
-                    let _ = window.close();
-                }
-            }
-        }
-        Err(error) => {
-            emit_download_state(app, "error", &error, Some(file_name.to_string()));
-            let _ = app.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, error);
-        }
-    }
-}
-
-/// 取 Mod 的首选文件 id（MAIN 分类优先，否则第一个），用于 Premium 路径未指定文件时补齐。
-async fn resolve_preferred_file_id(game_domain: &str, mod_id: u64) -> Result<u64, String> {
-    let files = nexus_api::get_mod_files_raw(game_domain, mod_id).await?;
-    files
-        .iter()
-        .find(|file| file.category_name.eq_ignore_ascii_case("MAIN"))
-        .or_else(|| files.first())
-        .map(|file| file.file_id)
-        .ok_or_else(|| "该 Mod 没有可下载的文件".to_string())
-}
-
-/// Premium 会员路径：调官方接口拿直链 → reqwest 下载到临时目录 → 复用安装逻辑。
-async fn download_via_api(
-    app: &AppHandle,
-    game_domain: &str,
-    mod_id: u64,
-    file_id: u64,
-) -> Result<(), String> {
-    emit_download_state(app, "preparing", "正在获取下载链接...", None);
-    let download_url =
-        nexus_api::get_premium_download_link(game_domain, mod_id, file_id).await?;
-
-    let parsed_url = download_url
-        .parse::<tauri::webview::Url>()
-        .map_err(|e| format!("无效的下载地址: {}", e))?;
-    let file_name = decode_file_name_from_url(&parsed_url);
-
-    let download_dir = std::env::temp_dir().join("nexus-mod-downloads");
-    fs::create_dir_all(&download_dir).map_err(|e| format!("无法创建临时下载目录: {}", e))?;
-    let destination = make_unique_destination(&download_dir, &file_name);
-
-    emit_download_state(
-        app,
-        "downloading",
-        format!("正在下载 {}", file_name),
-        Some(file_name.clone()),
-    );
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(API_DOWNLOAD_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("初始化下载客户端失败: {}", e))?;
-    let response = client
-        .get(download_url.as_str())
-        .header(reqwest::header::USER_AGENT, API_DOWNLOAD_USER_AGENT)
-        .send()
-        .await
-        .map_err(|e| format!("连接下载服务器失败: {}", e))?;
-    if !response.status().is_success() {
-        return Err(format!("下载失败 (HTTP {})", response.status()));
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("读取下载内容失败: {}", e))?;
-    fs::write(&destination, &bytes).map_err(|e| format!("写入下载文件失败: {}", e))?;
-
-    install_downloaded_archive(app, &destination, &file_name, false);
-    Ok(())
 }
 
 /// Rust 侧导航监听：登录页 → 强制显示窗口并提示登录；回到 mod 页 → 提示自动下载中。
@@ -589,15 +473,14 @@ fn handle_navigation(app: &AppHandle, url: &tauri::webview::Url) {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-            emit_download_state(
+            emit_webview_phase(
                 app,
                 "login-required",
                 "请在弹窗中登录 Nexus 账号，登录后将自动继续下载",
-                None,
             );
         }
         "www.nexusmods.com" if url.path().contains("/mods/") => {
-            emit_download_state(app, "auto-downloading", "正在自动下载 Mod，请稍候...", None);
+            emit_webview_phase(app, "auto-downloading", "正在自动下载 Mod，请稍候...");
         }
         _ => {}
     }
@@ -621,7 +504,7 @@ fn open_download_webview(
         .parse()
         .map_err(|error| format!("无效的 Nexus 下载地址: {}", error))?;
 
-    emit_download_state(app, "auto-downloading", "正在自动下载 Mod，请稍候...", None);
+    emit_webview_phase(app, "auto-downloading", "正在自动下载 Mod，请稍候...");
 
     if let Some(existing) = app.get_webview_window(DOWNLOAD_WINDOW_LABEL) {
         existing
@@ -655,49 +538,56 @@ fn open_download_webview(
     })
     .on_download(move |_webview, event| {
         let app_handle = &download_app;
+        // webview 路径下载成功后需关 nexus-download 窗口
+        let reporter = TauriEventReporter::new(app_handle.clone(), true);
         match event {
             DownloadEvent::Requested { url, destination } => {
                 let download_dir = std::env::temp_dir().join("nexus-mod-downloads");
-                if let Err(error) = fs::create_dir_all(&download_dir) {
-                    let message = format!("无法创建临时下载目录: {}", error);
-                    emit_download_state(app_handle, "error", &message, None);
-                    let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
+                if let Err(error) = std::fs::create_dir_all(&download_dir) {
+                    reporter.report(NexusDownloadEvent::Error {
+                        file_name: None,
+                        message: format!("无法创建临时下载目录: {}", error),
+                        kind: ErrorKind::Install,
+                    });
                     return false;
                 }
 
-                let file_name = decode_file_name_from_url(&url);
-                let destination_path = make_unique_destination(&download_dir, &file_name);
+                let file_name = core_dl::decode_file_name_from_url(&url);
+                let destination_path = core_dl::make_unique_destination(&download_dir, &file_name);
                 *destination = destination_path;
 
-                emit_download_state(
-                    app_handle,
-                    "downloading",
-                    format!("正在下载 {}", file_name),
-                    Some(file_name),
-                );
+                reporter.report(NexusDownloadEvent::Downloading {
+                    file_name: file_name.clone(),
+                    message: format!("正在下载 {}", file_name),
+                });
             }
             DownloadEvent::Finished { url, path, success } => {
                 let file_name = path
                     .as_deref()
                     .and_then(extract_file_name)
-                    .unwrap_or_else(|| decode_file_name_from_url(&url));
+                    .unwrap_or_else(|| core_dl::decode_file_name_from_url(&url));
 
                 if !success {
-                    let message = format!("下载失败: {}", file_name);
-                    emit_download_state(app_handle, "error", &message, Some(file_name.clone()));
-                    let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, DOWNLOAD_FAILED_EVENT, message);
+                    reporter.report(NexusDownloadEvent::Error {
+                        file_name: Some(file_name.clone()),
+                        message: format!("下载失败: {}", file_name),
+                        kind: ErrorKind::Download,
+                    });
                     return true;
                 }
 
                 let Some(archive_path) = path else {
-                    let message =
-                        "下载已完成，但没有返回本地文件路径，无法自动安装".to_string();
-                    emit_download_state(app_handle, "error", &message, Some(file_name.clone()));
-                    let _ = app_handle.emit_to(MAIN_WINDOW_LABEL, INSTALL_ERROR_EVENT, message);
+                    reporter.report(NexusDownloadEvent::Error {
+                        file_name: Some(file_name.clone()),
+                        message: "下载已完成，但没有返回本地文件路径，无法自动安装"
+                            .to_string(),
+                        kind: ErrorKind::Install,
+                    });
                     return true;
                 };
 
-                install_downloaded_archive(app_handle, &archive_path, &file_name, true);
+                let ctx = app_handle.state::<AppState>().ctx.clone();
+                core_dl::install_downloaded_archive(&ctx, &reporter, &archive_path, &file_name);
             }
             _ => {}
         }
@@ -716,7 +606,11 @@ fn open_download_webview(
     Ok(())
 }
 
-/// 全自动下载安装统一入口：Premium 走 API 直链，免费账号/无 Key 走 webview 注入脚本。
+/// 全自动下载安装统一入口：Premium 走 API 直链，免费账号 / API 失败回退 webview 注入脚本。
+///
+/// Dispatch 策略留在 src-tauri（GUI 专属）；core 只提供 `download_premium_via_api`
+/// 这一个原子操作。CLI 后续会自己实现三段式 fallback（API → headless → spawn GUI），
+/// 也只复用 core 的同一 API 路径，不复用本函数。
 #[tauri::command]
 pub async fn nexus_start_download(
     app: AppHandle,
@@ -724,29 +618,36 @@ pub async fn nexus_start_download(
     file_id: Option<u64>,
 ) -> Result<(), String> {
     let game_domain = current_game_domain(&app)?;
+    let ctx = app.state::<AppState>().ctx.clone();
 
-    let is_premium = nexus_api::ensure_premium_status(&app.state::<AppState>().ctx)
-        .await
-        .unwrap_or(false);
+    let is_premium = nexus_api::ensure_premium_status(&ctx).await.unwrap_or(false);
     if is_premium {
         let resolved_file_id = match file_id {
             Some(id) => Some(id),
-            None => resolve_preferred_file_id(&game_domain, mod_id).await.ok(),
+            None => core_dl::resolve_preferred_file_id(&game_domain, mod_id)
+                .await
+                .ok(),
         };
         if let Some(resolved_file_id) = resolved_file_id {
-            match download_via_api(&app, &game_domain, mod_id, resolved_file_id).await {
+            // API 路径无窗口可关，close_window_on_success = false
+            let reporter = TauriEventReporter::new(app.clone(), false);
+            match core_dl::download_premium_via_api(
+                &ctx,
+                &reporter,
+                &game_domain,
+                mod_id,
+                resolved_file_id,
+            )
+            .await
+            {
                 Ok(()) => return Ok(()),
                 Err(error) => {
                     eprintln!("Premium API 下载失败，回退到浏览器下载: {}", error);
-                    if let Ok(mut premium) = app.state::<AppState>().nexus_is_premium.lock() {
-                        *premium = Some(false);
-                    }
-                    emit_download_state(
-                        &app,
-                        "preparing",
-                        "直链下载失败，切换为浏览器下载方式...",
-                        None,
-                    );
+                    // core 失败路径不 emit Error 也已 invalidate premium 缓存；
+                    // 这里 emit 切换提示覆盖前端"正在获取下载链接..."状态
+                    reporter.report(NexusDownloadEvent::Preparing {
+                        message: "直链下载失败，切换为浏览器下载方式...".to_string(),
+                    });
                 }
             }
         }
