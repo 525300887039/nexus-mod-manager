@@ -117,7 +117,9 @@ enum NexusAction {
     Info { mod_id: u64 },
     /// 拉取当前游戏的 trending mod 列表
     Trending,
-    /// 下载某个 mod（当前仅支持 Premium 直链）
+    /// 下载并安装某个 mod。Premium 直链优先；非 Premium 或直链失败时自动 spawn
+    /// GUI 子进程（nexus-mod-manager.exe --headless-download）兜底，复用 WebView2
+    /// 自动化下载流程
     Download {
         mod_id: u64,
         /// 指定文件 id；缺省时自动选 MAIN 分类的第一个

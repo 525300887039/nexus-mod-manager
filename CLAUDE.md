@@ -42,6 +42,7 @@ docs：更新 README 界面预览并补充截图脚本
 - Nexus 下载流程：files 标签 → 点 "Manual"（旧版 `<a class="btn inline-flex">`）→ **iframe 内**渲染 "Slow download / Fast download" 选择界面 → 点 Slow download 进入 3 秒倒计时 → Nexus 自动开始下载，被 Tauri 的 `on_download` 拦截。
 - 注入脚本 `nexus_download.rs::INJECTION_SCRIPT` 用 `initialization_script_for_all_frames` 在主框架和所有同源 / `about:blank` 子框架内运行；按钮匹配一律走可见文本（`nxm-button-*` 等 class 会随改版变）；必须避开 "Mod manager download" / "Vortex"（生成 nxm:// 链接，下载拦截不到）。
 - 全自动下载分两路：Premium 走 `nexus_api::get_premium_download_link` 拿直链 reqwest 下载，免费账号走 webview 脚本注入；API 失败时自动回退 webview，并把 `AppState.nexus_is_premium` 缓存重置为 false。
+- CLI 端 `nmm nexus download` 复用同一套：第一段在 `nmm-cli` 进程内直接调 `core_dl::download_premium_via_api`；第一段失败（非 Premium / API 报错）时 spawn `nexus-mod-manager.exe --headless-download <mod-id> [--file-id <id>] --game-domain <domain>` 子进程兜底——子进程在 `src-tauri/src/headless_download.rs` 里跑：不创建主窗口（`ctx.config_mut().app.windows.clear()`）、复用 `nexus_download::open_download_webview` 与 INJECTION_SCRIPT、通过 `StdoutJsonReporter` 把 `NexusDownloadEvent` 以 JSON Lines 写到 stdout，CLI 端 `subprocess.rs` 捕获并转发给 `CliReporter`。`nmm.exe` 与 `nexus-mod-manager.exe` 必须同目录（CLI 用 `current_exe` 同目录优先、ancestor 找 cargo target dir 作 dev 回退）。
 
 ### 配置存储
 
