@@ -5,10 +5,8 @@
 # 当前 members：
 #   - src-tauri/      Tauri 桌面应用（GUI binary，原生入口）
 #   - crates/core/    无 Tauri 依赖的业务逻辑库
-#
-# 后续 CLI 化 change 将继续添加：
-#   - crates/cli/     独立 CLI binary
+#   - crates/cli/     独立 CLI binary（nmm.exe，console subsystem）
 
 [workspace]
-members = ["src-tauri", "crates/core"]
+members = ["src-tauri", "crates/core", "crates/cli"]
 resolver = "2"
