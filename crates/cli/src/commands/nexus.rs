@@ -2,9 +2,10 @@
 
 use crate::cli_reporter::CliReporter;
 use crate::output::print_result;
+use crate::subprocess;
 use crate::{NexusAction, NexusArgs};
 use nmm_core::nexus_api as core_nexus;
-use nmm_core::nexus_download as core_dl;
+use nmm_core::nexus_download::{self as core_dl, NexusDownloadEvent, NexusDownloadReporter};
 use nmm_core::types::nexus::NexusModInfo;
 use nmm_core::AppContext;
 use serde::Serialize;
@@ -48,42 +49,87 @@ async fn download(
             "尚未选择游戏，请用 `nmm games switch <domain>` 设置当前游戏".to_string()
         })?;
 
-    // 本 change 范围内仅支持 Premium 直链——非 Premium 明确失败
-    let is_premium = core_nexus::ensure_premium_status(ctx).await.unwrap_or(false);
-    if !is_premium {
-        return Err(
-            "nmm nexus download 当前仅支持 Premium 直链下载。\n\
-             你的账号不是 Premium 会员（或 API Key 未设置 / API 探测失败）。\n\
-             请使用 GUI（npm run tauri:dev）完成此下载，\n\
-             或等待下一 change `add-cli-download-fallback` 引入 headless / GUI 子进程兜底。"
-                .to_string(),
-        );
-    }
-
-    // file_id 缺省时调 resolve_preferred_file_id 选 MAIN 分类的第一个
-    let resolved_file_id = match file_id {
-        Some(id) => id,
-        None => core_dl::resolve_preferred_file_id(&game_domain, mod_id).await?,
-    };
-
     let reporter = CliReporter { json_mode: json };
 
-    core_dl::download_premium_via_api(ctx, &reporter, &game_domain, mod_id, resolved_file_id)
-        .await?;
+    // 第一段：Premium 直链
+    let (final_mod_id, final_file_id) = match try_premium_download(
+        ctx,
+        &reporter,
+        &game_domain,
+        mod_id,
+        file_id,
+    )
+    .await
+    {
+        Ok(fid) => (mod_id, Some(fid)),
+        Err(reason) => {
+            // 第二段：GUI 子进程兜底。fallback 前 emit Preparing 让用户知道延迟原因
+            reporter.report(NexusDownloadEvent::Preparing {
+                message: format!(
+                    "Premium 直链不可用（{}），准备启动 GUI 子进程下载（首次约需 2-3 秒）...",
+                    reason
+                ),
+            });
+
+            let gui_exe = subprocess::resolve_gui_binary()?;
+            let result = subprocess::run_headless_download(
+                &reporter,
+                &gui_exe,
+                mod_id,
+                file_id,
+                &game_domain,
+            )
+            .await?;
+            (result.mod_id, result.file_id)
+        }
+    };
 
     // 下载流程结束后再 emit 一行最终结果总结（JSON 模式：type: result；人类模式：✓ 已下载）
     if json {
         let payload = json!({
             "type": "result",
             "ok": true,
-            "modId": mod_id,
-            "fileId": resolved_file_id,
+            "modId": final_mod_id,
+            "fileId": final_file_id,
         });
         println!("{}", payload);
     } else {
-        println!("✓ 已下载并安装 mod_id={} file_id={}", mod_id, resolved_file_id);
+        match final_file_id {
+            Some(fid) => println!("✓ 已下载并安装 mod_id={} file_id={}", final_mod_id, fid),
+            None => println!("✓ 已下载并安装 mod_id={}", final_mod_id),
+        }
     }
     Ok(())
+}
+
+/// 第一段：Premium 直链下载。
+///
+/// 任一步骤失败都返回 Err（含简短原因，用于 fallback 时 emit 给用户）。
+/// 成功时返回实际使用的 file_id（caller 用来 emit 最终 result 行）。
+async fn try_premium_download(
+    ctx: &AppContext,
+    reporter: &CliReporter,
+    game_domain: &str,
+    mod_id: u64,
+    file_id: Option<u64>,
+) -> Result<u64, String> {
+    let is_premium = core_nexus::ensure_premium_status(ctx).await.unwrap_or(false);
+    if !is_premium {
+        return Err("当前账号不是 Premium / API Key 未设置 / 探测失败".to_string());
+    }
+
+    let resolved_file_id = match file_id {
+        Some(id) => id,
+        None => core_dl::resolve_preferred_file_id(game_domain, mod_id)
+            .await
+            .map_err(|e| format!("解析默认文件失败: {}", e))?,
+    };
+
+    core_dl::download_premium_via_api(ctx, reporter, game_domain, mod_id, resolved_file_id)
+        .await
+        .map_err(|e| format!("Premium API 下载失败: {}", e))?;
+
+    Ok(resolved_file_id)
 }
 
 async fn trending(ctx: &AppContext, json: bool) -> Result<(), String> {
