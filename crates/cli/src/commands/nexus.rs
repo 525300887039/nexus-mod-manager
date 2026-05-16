@@ -1,11 +1,14 @@
 //! `nmm nexus` 子命令组。
 
+use crate::cli_reporter::CliReporter;
 use crate::output::print_result;
 use crate::{NexusAction, NexusArgs};
 use nmm_core::nexus_api as core_nexus;
+use nmm_core::nexus_download as core_dl;
 use nmm_core::types::nexus::NexusModInfo;
 use nmm_core::AppContext;
 use serde::Serialize;
+use serde_json::json;
 
 #[derive(Serialize)]
 struct ModListResult {
@@ -24,8 +27,63 @@ pub async fn run(ctx: &AppContext, json: bool, args: NexusArgs) -> Result<(), St
         NexusAction::Trending => trending(ctx, json).await,
         NexusAction::Info { mod_id } => info(ctx, json, mod_id).await,
         NexusAction::Search { query } => search(ctx, json, query).await,
-        NexusAction::Download { .. } => Err("nexus download 将在 step 8 实现".to_string()),
+        NexusAction::Download { mod_id, file_id } => download(ctx, json, mod_id, file_id).await,
     }
+}
+
+async fn download(
+    ctx: &AppContext,
+    json: bool,
+    mod_id: u64,
+    file_id: Option<u64>,
+) -> Result<(), String> {
+    // 取当前游戏 domain
+    let game_domain = ctx
+        .current_profile
+        .lock()
+        .map_err(|e| format!("current_profile lock poisoned: {}", e))?
+        .as_ref()
+        .map(|p| p.nexus_domain.clone())
+        .ok_or_else(|| {
+            "尚未选择游戏，请用 `nmm games switch <domain>` 设置当前游戏".to_string()
+        })?;
+
+    // 本 change 范围内仅支持 Premium 直链——非 Premium 明确失败
+    let is_premium = core_nexus::ensure_premium_status(ctx).await.unwrap_or(false);
+    if !is_premium {
+        return Err(
+            "nmm nexus download 当前仅支持 Premium 直链下载。\n\
+             你的账号不是 Premium 会员（或 API Key 未设置 / API 探测失败）。\n\
+             请使用 GUI（npm run tauri:dev）完成此下载，\n\
+             或等待下一 change `add-cli-download-fallback` 引入 headless / GUI 子进程兜底。"
+                .to_string(),
+        );
+    }
+
+    // file_id 缺省时调 resolve_preferred_file_id 选 MAIN 分类的第一个
+    let resolved_file_id = match file_id {
+        Some(id) => id,
+        None => core_dl::resolve_preferred_file_id(&game_domain, mod_id).await?,
+    };
+
+    let reporter = CliReporter { json_mode: json };
+
+    core_dl::download_premium_via_api(ctx, &reporter, &game_domain, mod_id, resolved_file_id)
+        .await?;
+
+    // 下载流程结束后再 emit 一行最终结果总结（JSON 模式：type: result；人类模式：✓ 已下载）
+    if json {
+        let payload = json!({
+            "type": "result",
+            "ok": true,
+            "modId": mod_id,
+            "fileId": resolved_file_id,
+        });
+        println!("{}", payload);
+    } else {
+        println!("✓ 已下载并安装 mod_id={} file_id={}", mod_id, resolved_file_id);
+    }
+    Ok(())
 }
 
 async fn trending(ctx: &AppContext, json: bool) -> Result<(), String> {

@@ -8,6 +8,7 @@
 
 use clap::{Parser, Subcommand};
 
+mod cli_reporter;
 mod commands;
 mod output;
 mod setup;
