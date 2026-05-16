@@ -373,3 +373,149 @@ fn invalidate_premium_cache(ctx: &AppContext) {
         *guard = Some(false);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
+
+    /// 测试用 reporter：把收到的事件全收集到 Vec，方便断言事件序列。
+    struct MockReporter(Mutex<Vec<NexusDownloadEvent>>);
+
+    impl MockReporter {
+        fn new() -> Self {
+            Self(Mutex::new(Vec::new()))
+        }
+
+        fn events(&self) -> Vec<NexusDownloadEvent> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    impl NexusDownloadReporter for MockReporter {
+        fn report(&self, event: NexusDownloadEvent) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    /// 为每个测试分配唯一临时目录，drop 时清理。
+    /// 不引入 tempfile crate，沿用本 crate 既有的 std::env::temp_dir 测试模式。
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+    static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    impl TempDirGuard {
+        fn new(label: &str) -> Self {
+            let id = TMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+            let path = std::env::temp_dir().join(format!(
+                "nmm-core-test-{}-{}-{}",
+                label,
+                std::process::id(),
+                id
+            ));
+            fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn make_unique_destination_returns_original_when_free() {
+        let dir = TempDirGuard::new("make-unique-free");
+        let dest = make_unique_destination(dir.path(), "foo.zip");
+        assert_eq!(dest, dir.path().join("foo.zip"));
+    }
+
+    #[test]
+    fn make_unique_destination_appends_numbered_suffix_with_extension() {
+        let dir = TempDirGuard::new("make-unique-ext");
+        fs::write(dir.path().join("foo.zip"), b"x").unwrap();
+        let dest = make_unique_destination(dir.path(), "foo.zip");
+        assert_eq!(dest, dir.path().join("foo (1).zip"));
+
+        fs::write(&dest, b"x").unwrap();
+        let dest2 = make_unique_destination(dir.path(), "foo.zip");
+        assert_eq!(dest2, dir.path().join("foo (2).zip"));
+    }
+
+    #[test]
+    fn make_unique_destination_handles_files_without_extension() {
+        let dir = TempDirGuard::new("make-unique-noext");
+        fs::write(dir.path().join("foo"), b"x").unwrap();
+        let dest = make_unique_destination(dir.path(), "foo");
+        assert_eq!(dest, dir.path().join("foo (1)"));
+    }
+
+    #[test]
+    fn decode_file_name_extracts_last_segment_with_url_decoding() {
+        let url: Url = "https://example.com/files/My%20Mod%20v1.2.zip"
+            .parse()
+            .unwrap();
+        assert_eq!(decode_file_name_from_url(&url), "My Mod v1.2.zip");
+    }
+
+    #[test]
+    fn decode_file_name_falls_back_when_last_segment_empty() {
+        let url: Url = "https://example.com/files/".parse().unwrap();
+        assert_eq!(decode_file_name_from_url(&url), "mod-download");
+    }
+
+    #[test]
+    fn install_emits_saved_when_archive_format_unsupported() {
+        let dir = TempDirGuard::new("install-saved");
+        let txt_path = dir.path().join("readme.txt");
+        fs::write(&txt_path, b"not an archive").unwrap();
+
+        let ctx = make_ctx_in(dir.path());
+        let reporter = MockReporter::new();
+        install_downloaded_archive(&ctx, &reporter, &txt_path, "readme.txt");
+
+        let events = reporter.events();
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(events[0], NexusDownloadEvent::Saved { ref file_name, .. } if file_name == "readme.txt"),
+            "expected single Saved event, got {:?}",
+            events
+        );
+    }
+
+    #[test]
+    fn install_emits_install_error_when_file_missing() {
+        let dir = TempDirGuard::new("install-missing");
+        let missing = dir.path().join("does-not-exist.zip");
+        let ctx = make_ctx_in(dir.path());
+        let reporter = MockReporter::new();
+        install_downloaded_archive(&ctx, &reporter, &missing, "does-not-exist.zip");
+
+        let events = reporter.events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            NexusDownloadEvent::Error {
+                kind: ErrorKind::Install,
+                ..
+            }
+        ));
+    }
+
+    /// 创建一个临时 db + game_path 设置好的 AppContext，给 install 测试用。
+    fn make_ctx_in(game_dir: &Path) -> AppContext {
+        let db_path = game_dir.join("test.sqlite");
+        let arc = AppContext::init(&db_path).expect("init AppContext");
+        *arc.game_path.lock().unwrap() = Some(game_dir.to_string_lossy().to_string());
+        Arc::try_unwrap(arc).ok().expect("unique Arc")
+    }
+}
