@@ -6,3 +6,5 @@
 pub mod config;
 pub mod games;
 pub mod mods;
+pub mod profiles;
+pub mod saves;

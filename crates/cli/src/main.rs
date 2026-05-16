@@ -134,11 +134,11 @@ struct SavesArgs {
 enum SavesAction {
     /// 列出存档
     List,
-    /// 导出存档到 zip
+    /// 导出存档槽位到 zip。save_id 形如 `profile1` 或 `modded:profile1`
     Export { save_id: String, path: String },
-    /// 从 zip 导入存档
-    Import { path: String },
-    /// 删除存档备份
+    /// 从 zip 导入到目标 save_id（形如 `profile1` 或 `modded:profile1`）；目标已存在时会自动备份
+    Import { save_id: String, path: String },
+    /// 删除存档备份（id 为 `saves list` 中 backup 的 name 字段）
     DeleteBackup { id: String },
 }
 
@@ -210,8 +210,8 @@ async fn dispatch(cli: Cli) -> Result<(), String> {
         Commands::Games(args) => commands::games::run(&ctx, json, args).await,
         Commands::Mods(args) => commands::mods::run(&ctx, json, args).await,
         Commands::Config(args) => commands::config::run(&ctx, json, args).await,
-        Commands::Nexus(_) | Commands::Saves(_) | Commands::Profiles(_) => {
-            Err("该子命令组将在后续 step 实现".to_string())
-        }
+        Commands::Saves(args) => commands::saves::run(&ctx, json, args).await,
+        Commands::Profiles(args) => commands::profiles::run(&ctx, json, args).await,
+        Commands::Nexus(_) => Err("nexus 子命令组将在 step 7-8 实现".to_string()),
     }
 }
