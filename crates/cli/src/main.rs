@@ -12,6 +12,7 @@ mod cli_reporter;
 mod commands;
 mod output;
 mod setup;
+mod subprocess;
 
 /// Tauri GUI 的 bundle identifier，需与 `src-tauri/tauri.conf.json` 的 `identifier` 一致。
 /// 用于拼接 tauri-plugin-single-instance 的 Named Mutex 名 `{identifier}-sim`。
