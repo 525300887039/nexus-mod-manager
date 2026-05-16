@@ -8,6 +8,8 @@
 
 use clap::{Parser, Subcommand};
 
+mod commands;
+mod output;
 mod setup;
 
 /// Tauri GUI 的 bundle identifier，需与 `src-tauri/tauri.conf.json` 的 `identifier` 一致。
@@ -201,12 +203,15 @@ async fn dispatch(cli: Cli) -> Result<(), String> {
         setup::require_write_access()?;
     }
 
-    let _ctx = setup::build_context(cli.game.as_deref())?;
+    let ctx = setup::build_context(cli.game.as_deref())?;
+    let json = cli.json;
 
-    // 占位：后续 step 在此分发具体子命令。当前只让 --help / --version 与解析路径走通。
-    Err(format!(
-        "子命令尚未实现（当前 change 在 step 2 阶段，已通过参数解析）。\n\
-         json={} game={:?} command={:?}",
-        cli.json, cli.game, cli.command
-    ))
+    match cli.command {
+        Commands::Games(args) => commands::games::run(&ctx, json, args).await,
+        Commands::Mods(args) => commands::mods::run(&ctx, json, args).await,
+        Commands::Config(args) => commands::config::run(&ctx, json, args).await,
+        Commands::Nexus(_) | Commands::Saves(_) | Commands::Profiles(_) => {
+            Err("该子命令组将在后续 step 实现".to_string())
+        }
+    }
 }
