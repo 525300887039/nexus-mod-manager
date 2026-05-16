@@ -15,3 +15,7 @@ clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# 仅 Windows：调 CreateMutexW 检测 GUI 是否在跑（tauri-plugin-single-instance 用同名 Named Mutex）
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Security"] }
