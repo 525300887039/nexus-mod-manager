@@ -109,11 +109,11 @@ struct NexusArgs {
 
 #[derive(Subcommand, Debug)]
 enum NexusAction {
-    /// 按名称搜索 mod
+    /// 按"已安装 mod"的名字查找对应 Nexus 远程条目（与 GUI 翻译流程一致；不是全网搜索）
     Search { query: String },
-    /// 查看 mod 详情
+    /// 查看 mod 详情（按 mod_id 直接拉 Nexus API）
     Info { mod_id: u64 },
-    /// 拉取 trending mod 列表
+    /// 拉取当前游戏的 trending mod 列表
     Trending,
     /// 下载某个 mod（当前仅支持 Premium 直链）
     Download {
@@ -212,6 +212,6 @@ async fn dispatch(cli: Cli) -> Result<(), String> {
         Commands::Config(args) => commands::config::run(&ctx, json, args).await,
         Commands::Saves(args) => commands::saves::run(&ctx, json, args).await,
         Commands::Profiles(args) => commands::profiles::run(&ctx, json, args).await,
-        Commands::Nexus(_) => Err("nexus 子命令组将在 step 7-8 实现".to_string()),
+        Commands::Nexus(args) => commands::nexus::run(&ctx, json, args).await,
     }
 }
