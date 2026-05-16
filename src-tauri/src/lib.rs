@@ -297,6 +297,18 @@ fn migrate_legacy_app_data() -> Result<(), String> {
 
 pub fn run() {
     let app = tauri::Builder::default()
+        // single-instance MUST 第一个注册：其它 plugin 的 setup 副作用会在 second instance 上 leak。
+        // callback 收到 second instance 的 argv + cwd；我们只用它聚焦已有 main 窗口。
+        // headless 子进程（headless_download::run_headless）显式不注册此 plugin——
+        // 那是 CLI 的预期 fallback 路径，注册会与 GUI 主进程竞争 mutex。
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let _ = args;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
