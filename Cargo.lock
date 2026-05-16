@@ -2372,7 +2372,6 @@ dependencies = [
  "encoding_rs",
  "nmm-core",
  "opener",
- "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
