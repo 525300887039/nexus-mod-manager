@@ -4,6 +4,7 @@ use nmm_core::nexus_download::{
 };
 use serde::Serialize;
 use std::path::Path;
+use std::sync::Arc;
 use tauri::{
     webview::{DownloadEvent, WebviewWindowBuilder},
     AppHandle, Emitter, Manager, WebviewUrl,
@@ -486,13 +487,17 @@ fn handle_navigation(app: &AppHandle, url: &tauri::webview::Url) {
     }
 }
 
-/// 免费账号路径：打开（或复用）Nexus 下载弹窗，注入自动化脚本驱动下载。
-fn open_download_webview(
+/// 免费账号路径 / headless 子进程：打开（或复用）Nexus 下载弹窗，注入自动化脚本驱动下载。
+///
+/// reporter 由 caller 决定：GUI 端传 [`TauriEventReporter`]（emit Tauri 事件 + 关窗），
+/// headless 子进程传 [`crate::headless_download::StdoutJsonReporter`]（JSON Lines + app.exit）。
+pub(crate) fn open_download_webview(
     app: &AppHandle,
     game_domain: &str,
     mod_id: u64,
     file_id: Option<u64>,
     visible: bool,
+    reporter: Arc<dyn NexusDownloadReporter + Send + Sync>,
 ) -> Result<(), String> {
     let url = if let Some(file_id) = file_id {
         format!("https://www.nexusmods.com/{game_domain}/mods/{mod_id}?tab=files&file_id={file_id}")
@@ -521,6 +526,7 @@ fn open_download_webview(
 
     let download_app = app.clone();
     let nav_app = app.clone();
+    let download_reporter = reporter;
 
     let download_window = WebviewWindowBuilder::new(
         app,
@@ -538,8 +544,7 @@ fn open_download_webview(
     })
     .on_download(move |_webview, event| {
         let app_handle = &download_app;
-        // webview 路径下载成功后需关 nexus-download 窗口
-        let reporter = TauriEventReporter::new(app_handle.clone(), true);
+        let reporter: &(dyn NexusDownloadReporter + Send + Sync) = &*download_reporter;
         match event {
             DownloadEvent::Requested { url, destination } => {
                 let download_dir = std::env::temp_dir().join("nexus-mod-downloads");
@@ -587,7 +592,7 @@ fn open_download_webview(
                 };
 
                 let ctx = app_handle.state::<AppState>().ctx.clone();
-                core_dl::install_downloaded_archive(&ctx, &reporter, &archive_path, &file_name);
+                core_dl::install_downloaded_archive(&ctx, reporter, &archive_path, &file_name);
             }
             _ => {}
         }
@@ -654,5 +659,8 @@ pub async fn nexus_start_download(
     }
 
     let visible = config::config_get_nexus_download_visible();
-    open_download_webview(&app, &game_domain, mod_id, file_id, visible)
+    // GUI 路径：webview 下载完成需关 nexus-download 窗口（close_window_on_success = true）
+    let reporter: Arc<dyn NexusDownloadReporter + Send + Sync> =
+        Arc::new(TauriEventReporter::new(app.clone(), true));
+    open_download_webview(&app, &game_domain, mod_id, file_id, visible, reporter)
 }
