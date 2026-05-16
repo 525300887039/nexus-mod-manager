@@ -227,8 +227,16 @@ pub fn install_downloaded_archive(
 
 /// Premium 路径：调官方接口拿直链 → reqwest 下载到临时目录 → 复用安装逻辑。
 ///
-/// 失败时**先重置** `ctx.nexus_is_premium = Some(false)` 再 emit `Error`，
-/// 然后返回 `Err(_)` 让调用方决定回退策略（GUI 回退 webview / CLI 回退 headless 或 spawn GUI）。
+/// **失败语义**：下载阶段任意失败 → 先重置 `ctx.nexus_is_premium = Some(false)` 再返回
+/// `Err(_)`；**不** emit `NexusDownloadEvent::Error`——由调用方根据回退策略决定向用户
+/// 展示什么（GUI dispatch 会 emit `Preparing { "直链下载失败，切换为浏览器下载方式..." }`
+/// 然后开 webview；CLI dispatch 后续会 emit Preparing 跳到下一段或最终 emit Error）。
+///
+/// 这与既有 GUI 行为一致：原 `download_via_api` 失败时不直接 emit error，让 dispatch
+/// 层用"切换提示"覆盖，避免 UI 先红后蓝的闪烁。
+///
+/// **安装阶段**失败（解压 / 权限 / 游戏路径缺失）由 `install_downloaded_archive` 内部
+/// emit `Error { kind: Install }`，与回退策略无关——故 install 失败时本函数仍返回 `Ok(())`。
 pub async fn download_premium_via_api(
     ctx: &AppContext,
     reporter: &dyn NexusDownloadReporter,
@@ -240,47 +248,18 @@ pub async fn download_premium_via_api(
         message: "正在获取下载链接...".to_string(),
     });
 
-    let download_url = match nexus_api::get_premium_download_link(game_domain, mod_id, file_id)
+    let download_url = nexus_api::get_premium_download_link(game_domain, mod_id, file_id)
         .await
-    {
-        Ok(url) => url,
-        Err(error) => {
-            invalidate_premium_cache(ctx);
-            reporter.report(NexusDownloadEvent::Error {
-                file_name: None,
-                message: error.clone(),
-                kind: ErrorKind::Download,
-            });
-            return Err(error);
-        }
-    };
+        .map_err(|error| fail_premium(ctx, error))?;
 
-    let parsed_url = match download_url.parse::<Url>() {
-        Ok(url) => url,
-        Err(error) => {
-            let message = format!("无效的下载地址: {}", error);
-            invalidate_premium_cache(ctx);
-            reporter.report(NexusDownloadEvent::Error {
-                file_name: None,
-                message: message.clone(),
-                kind: ErrorKind::Download,
-            });
-            return Err(message);
-        }
-    };
+    let parsed_url = download_url
+        .parse::<Url>()
+        .map_err(|error| fail_premium(ctx, format!("无效的下载地址: {}", error)))?;
     let file_name = decode_file_name_from_url(&parsed_url);
 
     let download_dir = std::env::temp_dir().join("nexus-mod-downloads");
-    if let Err(error) = fs::create_dir_all(&download_dir) {
-        let message = format!("无法创建临时下载目录: {}", error);
-        invalidate_premium_cache(ctx);
-        reporter.report(NexusDownloadEvent::Error {
-            file_name: Some(file_name.clone()),
-            message: message.clone(),
-            kind: ErrorKind::Download,
-        });
-        return Err(message);
-    }
+    fs::create_dir_all(&download_dir)
+        .map_err(|error| fail_premium(ctx, format!("无法创建临时下载目录: {}", error)))?;
     let destination = make_unique_destination(&download_dir, &file_name);
 
     reporter.report(NexusDownloadEvent::Downloading {
@@ -288,79 +267,41 @@ pub async fn download_premium_via_api(
         message: format!("正在下载 {}", file_name),
     });
 
-    let client = match reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(API_DOWNLOAD_TIMEOUT_SECS))
         .build()
-    {
-        Ok(client) => client,
-        Err(error) => {
-            let message = format!("初始化下载客户端失败: {}", error);
-            invalidate_premium_cache(ctx);
-            reporter.report(NexusDownloadEvent::Error {
-                file_name: Some(file_name.clone()),
-                message: message.clone(),
-                kind: ErrorKind::Download,
-            });
-            return Err(message);
-        }
-    };
+        .map_err(|error| fail_premium(ctx, format!("初始化下载客户端失败: {}", error)))?;
 
-    let response = match client
+    let response = client
         .get(download_url.as_str())
         .header(reqwest::header::USER_AGENT, API_DOWNLOAD_USER_AGENT)
         .send()
         .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            let message = format!("连接下载服务器失败: {}", error);
-            invalidate_premium_cache(ctx);
-            reporter.report(NexusDownloadEvent::Error {
-                file_name: Some(file_name.clone()),
-                message: message.clone(),
-                kind: ErrorKind::Download,
-            });
-            return Err(message);
-        }
-    };
+        .map_err(|error| fail_premium(ctx, format!("连接下载服务器失败: {}", error)))?;
     if !response.status().is_success() {
-        let message = format!("下载失败 (HTTP {})", response.status());
-        invalidate_premium_cache(ctx);
-        reporter.report(NexusDownloadEvent::Error {
-            file_name: Some(file_name.clone()),
-            message: message.clone(),
-            kind: ErrorKind::Download,
-        });
-        return Err(message);
+        return Err(fail_premium(
+            ctx,
+            format!("下载失败 (HTTP {})", response.status()),
+        ));
     }
 
-    let bytes = match response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            let message = format!("读取下载内容失败: {}", error);
-            invalidate_premium_cache(ctx);
-            reporter.report(NexusDownloadEvent::Error {
-                file_name: Some(file_name.clone()),
-                message: message.clone(),
-                kind: ErrorKind::Download,
-            });
-            return Err(message);
-        }
-    };
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| fail_premium(ctx, format!("读取下载内容失败: {}", error)))?;
 
-    if let Err(error) = fs::write(&destination, &bytes) {
-        let message = format!("写入下载文件失败: {}", error);
-        invalidate_premium_cache(ctx);
-        reporter.report(NexusDownloadEvent::Error {
-            file_name: Some(file_name.clone()),
-            message: message.clone(),
-            kind: ErrorKind::Download,
-        });
-        return Err(message);
-    }
+    fs::write(&destination, &bytes)
+        .map_err(|error| fail_premium(ctx, format!("写入下载文件失败: {}", error)))?;
 
     install_downloaded_archive(ctx, reporter, &destination, &file_name);
     Ok(())
+}
+
+/// 下载阶段失败的统一处理：重置 premium 缓存 + 透传错误字符串。
+/// 不 emit 任何 reporter 事件——见 [`download_premium_via_api`] 的失败语义说明。
+fn fail_premium(ctx: &AppContext, message: String) -> String {
+    invalidate_premium_cache(ctx);
+    message
 }
 
 /// 把 `ctx.nexus_is_premium` 缓存重置为 `Some(false)`。
