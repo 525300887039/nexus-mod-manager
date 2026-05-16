@@ -4,6 +4,7 @@ pub use nmm_core::game_profile;
 mod config;
 mod db;
 mod game;
+pub mod headless_download;
 mod logs;
 mod mods;
 mod nexus_api;

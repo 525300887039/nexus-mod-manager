@@ -42,6 +42,12 @@ fn timestamp() -> String {
 fn main() {
     setup_logging();
 
+    // --headless-download 模式：CLI 端 spawn 进来跑无主窗口下载流程，stdout 输出 JSON Lines
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--headless-download") {
+        std::process::exit(nexus_mod_manager_lib::headless_download::main(args));
+    }
+
     // Catch panics and write to log
     let result = std::panic::catch_unwind(|| {
         nexus_mod_manager_lib::run();
